@@ -1,0 +1,25 @@
+Python
+
+*.pyc
+pycache/
+backend/.venv/
+venv/
+env/
+
+Node.js
+
+node_modules/
+dist/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+VS Code
+
+.vscode/
+
+Environment variables
+
+.env
+.env.*
