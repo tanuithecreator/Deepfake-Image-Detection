@@ -1,37 +1,62 @@
+import os
 from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_bcrypt import Bcrypt
 from flask_cors import CORS
-from .models import db, bcrypt 
-from .routes import api_bp 
-import os # Import os
-from dotenv import load_dotenv # Import dotenv
+from flask_jwt_extended import JWTManager
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
-def create_app():
+# Initialize extensions
+db = SQLAlchemy()
+migrate = Migrate()
+bcrypt = Bcrypt()
+jwt = JWTManager()
+
+def create_app(config_name='development'):
+    """Application factory function."""
     app = Flask(__name__)
     
-    # --- CONFIGURATION (Now read from .env) ---
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
+    # ---- Configuration ----
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
+        'DATABASE_URI',
+        'postgresql://postgres:password@localhost:5432/deepfake_db'
+    )
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'jwt-secret-key-change-in-production')
+    app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+    app.config['CORS_ORIGINS'] = os.getenv('CORS_ORIGINS', '*').split(',')
     
-    # Initialize extensions with the app
+    # ---- Initialize Extensions ----
     db.init_app(app)
+    migrate.init_app(app, db)
     bcrypt.init_app(app)
-    CORS(app) 
+    jwt.init_app(app)
     
-    # Register the Blueprint containing all routes
-    app.register_blueprint(api_bp)
-
-    # Create tables only if they don't exist
+    # Configure CORS
+    CORS(app, resources={
+        r"/api/*": {
+            "origins": app.config['CORS_ORIGINS'],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        }
+    })
+    
+    # ---- Register Blueprints ----
+    from routes import api_bp
+    app.register_blueprint(api_bp, url_prefix='/api')
+    
+    # ---- Create Tables & Context ----
     with app.app_context():
         db.create_all()
-        print("Database tables ensured.")
-        
+    
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    print("Flask server running...")
-    app.run(debug=True, port=5000)
+    # Run on 127.0.0.1:5000 for development
+    app.run(debug=True, host='127.0.0.1', port=5000)

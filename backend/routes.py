@@ -1,209 +1,264 @@
-import os
-import io
-import numpy as np
-import tensorflow as tf
-from PIL import Image
-from flask import request, jsonify, g, Blueprint
-from functools import wraps
-import hashlib
-import matplotlib.pyplot as plt
-import seaborn as sns 
-import base64
 
-from .models import db, bcrypt, User, DetectionLog
+import os
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+from PIL import Image
+from io import BytesIO
+from werkzeug.utils import secure_filename
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from app import db, bcrypt
+from models import User, Upload
 
 api_bp = Blueprint('api', __name__)
 
-# --- MODEL CONFIGURATION ---
-MODEL_CONFIGS = {
-    "XCEPTION_FF++": {
-        "path": "model/xceptionnet_detector_best.h5",
-        "last_conv": "block13_sepconv2_bn",
-        "input_size": 299 # Xception input size
-    },
-    # Future Model Example: You can uncomment and use this once you train a smaller model
-    # "MOBILENET_V2": {
-    #     "path": "model/mobilenet_v2_new.h5",
-    #     "last_conv": "Conv_1_relu",
-    #     "input_size": 224
-    # }
-}
+# ---- ML Model Configuration ----
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'model', 'combined_resnet18_best.pth')
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-LOADED_MODELS = {}
+# Load model at startup
+model = None
+try:
+    model = models.resnet18(pretrained=False)
+    model.fc = torch.nn.Linear(512, 2)  # Binary classification: REAL (0) or FAKE (1)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    model.to(DEVICE)
+    model.eval()
+    print(f"✓ Model loaded successfully: {MODEL_PATH}")
+except Exception as e:
+    print(f"✗ Failed to load model: {e}")
 
-# --- UTILITIES ---
-
-def load_models():
-    """Loads all models defined in MODEL_CONFIGS dynamically."""
-    global LOADED_MODELS
-    for name, config in MODEL_CONFIGS.items():
-        try:
-            model = tf.keras.models.load_model(config["path"])
-            model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-            LOADED_MODELS[name] = model
-            print(f"✅ Model '{name}' loaded successfully.")
-        except Exception as e:
-            print(f"❌ Error loading model '{name}': {e}")
-
-def get_current_user():
-    # ... (Logic remains the same) ...
-    auth_header = request.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(" ")[1]
-        user = User.query.filter_by(username=token).first() 
-        return user
-    return None
-
-def login_required(f):
-    # ... (Decorator remains the same) ...
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        g.user = get_current_user()
-        if g.user is None:
-            return jsonify({"message": "Authorization required or token invalid"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
-def preprocess_image(image_file, target_size):
-    """Loads, processes, and hashes the image with a dynamic target size."""
-    image_file.seek(0)
-    img_bytes = image_file.read()
-    image_file.seek(0)
-    
-    file_hash = hashlib.sha256(img_bytes).hexdigest()
-    img = Image.open(io.BytesIO(img_bytes))
-    img = img.resize((target_size, target_size))
-    img_array = np.array(img) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    
-    return img_array, file_hash, img
-
-def make_gradcam_heatmap(img_array, model, last_conv_layer_name):
-    # ... (Grad-CAM computation logic remains the same) ...
-    grad_model = tf.keras.models.Model(
-        [model.inputs], 
-        [model.get_layer(last_conv_layer_name).output, model.output]
+# Image preprocessing pipeline
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
     )
+])
 
-    with tf.GradientTape() as tape:
-        last_conv_layer_output, preds = grad_model(img_array)
-        pred_index = tf.argmax(preds[0]) 
-        class_channel = preds[:, pred_index]
+def allowed_file(filename: str) -> bool:
+    """Check if file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-    grads = tape.gradient(class_channel, last_conv_layer_output)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    last_conv_layer_output = last_conv_layer_output[0]
-    heatmap = last_conv_layer_output @ pooled_grads[..., tf.newaxis]
-    heatmap = tf.squeeze(heatmap)
-    heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
-    return heatmap.numpy()
-
-# --- ROUTES DEFINITION ---
-
-@api_bp.before_app_request
-def initialize_models_before_request():
-    """Ensure models are loaded before handling any request."""
-    if not LOADED_MODELS:
-        load_models()
+def run_inference(image_bytes: bytes) -> tuple:
+    """
+    Run PyTorch model inference on image bytes.
+    Returns: (prediction_result: str, confidence_score: float)
+    """
+    if model is None:
+        raise Exception("Model not loaded")
+    
+    try:
+        # Load and preprocess image
+        image = Image.open(BytesIO(image_bytes)).convert('RGB')
+        image_tensor = transform(image).unsqueeze(0).to(DEVICE)
         
-# ... (Register and Login routes remain the same) ...
+        # Run inference
+        with torch.no_grad():
+            output = model(image_tensor)
+            probabilities = torch.nn.functional.softmax(output, dim=1)
+            confidence, prediction = torch.max(probabilities, 1)
+        
+        # Map prediction: 0 = REAL, 1 = FAKE
+        result = "FAKE" if prediction.item() == 1 else "REAL"
+        confidence_score = confidence.item()
+        
+        return result, confidence_score
+    except Exception as e:
+        raise Exception(f"Inference failed: {str(e)}")
+
+# ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
 @api_bp.route('/register', methods=['POST'])
 def register():
+    """Register a new user account."""
     data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
     
-    if User.query.filter_by(username=username).first():
-        return jsonify({"message": "User already exists"}), 409
-
-    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(username=username, password_hash=hashed_password)
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
     
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({"message": "User registered successfully"}), 201
+    # Validate required fields
+    if not data.get('username') or not data.get('email') or not data.get('password'):
+        return jsonify({'error': 'Missing required fields: username, email, password'}), 400
+    
+    # Check username uniqueness
+    if User.query.filter_by(username=data['username']).first():
+        return jsonify({'error': 'Username already exists'}), 409
+    
+    # Check email uniqueness
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({'error': 'Email already exists'}), 409
+    
+    try:
+        user = User(username=data['username'], email=data['email'])
+        user.set_password(data['password'])
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'User registered successfully',
+            'user': user.to_dict()
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Registration failed: {str(e)}'}), 500
 
 @api_bp.route('/login', methods=['POST'])
 def login():
+    """Authenticate user and return JWT token."""
     data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    user = User.query.filter_by(username=username).first()
-
-    if user and bcrypt.check_password_hash(user.password_hash, password):
-        token = user.username 
-        return jsonify({"message": "Login successful", "token": token}), 200
     
-    return jsonify({"message": "Invalid credentials"}), 401
+    if not data or not data.get('username') or not data.get('password'):
+        return jsonify({'error': 'Missing username or password'}), 400
+    
+    user = User.query.filter_by(username=data['username']).first()
+    
+    if not user or not user.check_password(data['password']):
+        return jsonify({'error': 'Invalid username or password'}), 401
+    
+    access_token = create_access_token(identity=user.id)
+    
+    return jsonify({
+        'message': 'Login successful',
+        'access_token': access_token,
+        'user': user.to_dict()
+    }), 200
 
+# ============================================================================
+# Protected User Endpoints
+# ============================================================================
+
+@api_bp.route('/user', methods=['GET'])
+@jwt_required()
+def get_user():
+    """Get current authenticated user's information."""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    return jsonify(user.to_dict()), 200
+
+# ============================================================================
+# Core ML Prediction Endpoint
+# ============================================================================
 
 @api_bp.route('/predict', methods=['POST'])
-@login_required 
-def predict_deepfake():
-    # --- MODEL SELECTION (Primary Detector) ---
-    MODEL_KEY = "XCEPTION_FF++"
-    model = LOADED_MODELS.get(MODEL_KEY)
-    config = MODEL_CONFIGS.get(MODEL_KEY)
-
-    if model is None:
-        return jsonify({'error': f'Model {MODEL_KEY} not loaded.'}), 500
-
+@jwt_required()
+def predict():
+    """
+    Upload image and run deepfake detection.
+    - Requires JWT authentication
+    - Accepts image file upload (max 16MB)
+    - Runs PyTorch model inference
+    - Saves results to database
+    - Returns prediction results
+    """
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Validate file presence
     if 'file' not in request.files:
-        return jsonify({'error': 'No image file provided'}), 400
-
+        return jsonify({'error': 'No file part in request'}), 400
+    
     file = request.files['file']
     
-    # Preprocess using the selected model's input size
-    preprocessed_img, file_hash, original_img_data = preprocess_image(file, config['input_size'])
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
     
-    if preprocessed_img is None:
-        return jsonify({'error': 'Image processing failed.'}), 400
-
-    # --- CORE PREDICTION ---
-    prediction = model.predict(preprocessed_img)[0][0]
-    is_fake_probability = float(prediction)
-    result_label = "FAKE" if is_fake_probability > 0.5 else "REAL"
-
-    # --- XAI GENERATION ---
-    heatmap_b64 = None
-    xai_success = False
+    # Validate file type
+    if not allowed_file(file.filename):
+        allowed = ', '.join(ALLOWED_EXTENSIONS)
+        return jsonify({'error': f'Invalid file type. Allowed: {allowed}'}), 400
+    
     try:
-        heatmap = make_gradcam_heatmap(preprocessed_img, model, config['last_conv'])
+        # Read image bytes
+        image_bytes = file.read()
         
-        # Create an overlay image (using PIL and matplotlib)
-        plt.figure(figsize=(config['input_size'] / 100, config['input_size'] / 100), dpi=100) 
-        plt.imshow(original_img_data)
-        sns.heatmap(heatmap, alpha=0.5, cmap='jet', cbar=False, 
-                    square=True, xticklabels=False, yticklabels=False, 
-                    linewidths=0, linecolor='white')
+        # Run ML inference
+        prediction_result, confidence_score = run_inference(image_bytes)
         
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        plt.close()
-
-        heatmap_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-        xai_success = True
+        # Save prediction to database
+        filename = secure_filename(file.filename)
+        upload = Upload(
+            user_id=user_id,
+            image_filename=filename,
+            prediction_result=prediction_result,
+            confidence_score=confidence_score
+        )
+        db.session.add(upload)
+        db.session.commit()
         
-    except Exception as e:
-        print(f"XAI Grad-CAM Error: {e}") 
+        return jsonify({
+            'message': 'Prediction completed successfully',
+            'prediction': upload.to_dict()
+        }), 200
     
-    # --- DB LOGGING ---
-    log_entry = DetectionLog(
-        user_id=g.user.id,
-        file_hash=file_hash,
-        final_prediction=result_label,
-        confidence_score=round(is_fake_probability, 4),
-        xai_generated=xai_success,
-        model_used=MODEL_KEY # Log the model used
-    )
-    db.session.add(log_entry)
-    db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
-    # --- Return Response ---
+# ============================================================================
+# History Endpoint - Paginated User Predictions
+# ============================================================================
+
+@api_bp.route('/history', methods=['GET'])
+@jwt_required()
+def get_history():
+    """Get paginated history of predictions for current user."""
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Get pagination parameters from query string
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    
+    # Ensure valid pagination values
+    page = max(1, page)
+    per_page = min(100, max(1, per_page))
+    
+    # Query uploads ordered by most recent first
+    uploads_pagination = Upload.query.filter_by(user_id=user_id).order_by(
+        Upload.upload_timestamp.desc()
+    ).paginate(page=page, per_page=per_page)
+    
     return jsonify({
-        'status': 'success',
-        'prediction': result_label,
-        'confidence_fake': round(is_fake_probability * 100, 2),
-        'confidence_real': round((1 - is_fake_probability) * 100, 2),
-        'xai_heatmap_base64': heatmap_b64 
-    })
+        'total': uploads_pagination.total,
+        'pages': uploads_pagination.pages,
+        'current_page': page,
+        'per_page': per_page,
+        'uploads': [u.to_dict() for u in uploads_pagination.items]
+    }), 200
+
+# ============================================================================
+# Health Check Endpoint
+# ============================================================================
+
+@api_bp.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint to verify API and model status."""
+    try:
+        db.session.execute('SELECT 1')
+        db_status = 'connected'
+    except Exception as e:
+        db_status = f'error: {str(e)}'
+    
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'device': str(DEVICE),
+        'database': db_status
+    }), 200
