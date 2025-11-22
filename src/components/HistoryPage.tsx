@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Navigation } from './Navigation';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -21,7 +21,8 @@ import {
   Calendar,
   FileText,
   Shield,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 import type { DetectionResult, User } from '../App';
 
@@ -30,12 +31,42 @@ interface HistoryPageProps {
   user: User | null;
   logout: () => void;
   results: DetectionResult[];
+  refreshHistory?: () => Promise<void>;
+  selectedResultId?: DetectionResult['id'];
+  onSelectResult?: (result: DetectionResult) => void;
 }
 
-export function HistoryPage({ navigate, user, logout, results }: HistoryPageProps) {
+export function HistoryPage({ 
+  navigate, 
+  user, 
+  logout, 
+  results, 
+  refreshHistory,
+  selectedResultId,
+  onSelectResult
+}: HistoryPageProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterResult, setFilterResult] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('date');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Refresh history when component mounts
+  useEffect(() => {
+    if (refreshHistory) {
+      refreshHistory();
+    }
+  }, [refreshHistory]);
+
+  const handleRefresh = async () => {
+    if (refreshHistory) {
+      setIsRefreshing(true);
+      try {
+        await refreshHistory();
+      } finally {
+        setIsRefreshing(false);
+      }
+    }
+  };
 
   const filteredResults = results
     .filter(result => {
@@ -226,6 +257,14 @@ export function HistoryPage({ navigate, user, logout, results }: HistoryPageProp
                   </SelectContent>
                 </Select>
 
+                <Button 
+                  onClick={handleRefresh} 
+                  variant="outline" 
+                  disabled={isRefreshing || !refreshHistory}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                </Button>
                 <Button onClick={exportHistory} variant="outline">
                   <Download className="h-4 w-4 mr-2" />
                   Export
@@ -267,7 +306,10 @@ export function HistoryPage({ navigate, user, logout, results }: HistoryPageProp
                   </TableHeader>
                   <TableBody>
                     {filteredResults.map((result) => (
-                      <TableRow key={result.id} className="hover:bg-gray-50">
+                      <TableRow 
+                        key={result.id} 
+                        className={`hover:bg-gray-50 ${selectedResultId === result.id ? 'bg-blue-50/70' : ''}`}
+                      >
                         <TableCell>
                           <div className="flex items-center gap-3">
                             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
@@ -301,7 +343,13 @@ export function HistoryPage({ navigate, user, logout, results }: HistoryPageProp
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => navigate('results')}
+                            onClick={() => {
+                              if (onSelectResult) {
+                                onSelectResult(result);
+                              } else {
+                                navigate('results');
+                              }
+                            }}
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View

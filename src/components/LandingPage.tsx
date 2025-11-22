@@ -6,9 +6,10 @@ import { motion } from 'motion/react';
 interface LandingPageProps {
   navigate: (page: string) => void;
   isAuthenticated: boolean;
+  errorMessage?: string | null;
 }
 
-export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
+export function LandingPage({ navigate, isAuthenticated, errorMessage }: LandingPageProps) {
   return (
     <div className="min-h-screen bg-white">
       {/* Header */}
@@ -26,6 +27,9 @@ export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
                 <Button onClick={() => navigate('dashboard')}>Dashboard</Button>
               ) : (
                 <>
+                  {errorMessage ? (
+                    <span className="text-sm text-red-600 mr-4">{errorMessage}</span>
+                  ) : null}
                   <Button 
                     variant="ghost" 
                     onClick={() => navigate('auth')}
@@ -54,7 +58,7 @@ export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
                 Detect Deepfakes
               </span>
               <br />
-              <span className="text-gray-800">with AI Power</span>
+              <span className="text-gray-800">using AI </span>
             </h1>
             
             <p className="text-xl md:text-2xl text-gray-600 mb-8 leading-relaxed">
@@ -165,7 +169,7 @@ export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
               {/* Contact Info */}
               <div className="space-y-2 mb-6">
                 <div className="text-gray-400 text-sm">
-                  📧 contact@deepdetect.com
+                  📧 juliankipkoskei@gmail.com
                 </div>
                 <div className="text-gray-400 text-sm">
                   🌐 Available worldwide
@@ -215,11 +219,6 @@ export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
                 </li>
                 <li>
                   <a href="#" className="text-gray-400 hover:text-white transition-colors">
-                    API Documentation
-                  </a>
-                </li>
-                <li>
-                  <a href="#" className="text-gray-400 hover:text-white transition-colors">
                     Pricing
                   </a>
                 </li>
@@ -262,7 +261,7 @@ export function LandingPage({ navigate, isAuthenticated }: LandingPageProps) {
           {/* Bottom Section */}
           <div className="border-t border-gray-700 pt-8 flex flex-col md:flex-row justify-between items-center">
             <div className="text-gray-400 text-sm mb-4 md:mb-0">
-              © 2024 DeepDetect. All rights reserved. Built with ❤️ for digital security.
+              © 2025 DeepDetect. All rights reserved.
             </div>
             
             <div className="flex items-center gap-4">

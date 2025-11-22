@@ -13,6 +13,14 @@ interface DashboardProps {
 }
 
 export function Dashboard({ navigate, user, logout, recentResults }: DashboardProps) {
+  // Calculate stats from ALL results
+  const totalScans = recentResults.length;
+  const authenticCount = recentResults.filter(r => r.result === 'authentic').length;
+  const deepfakeCount = recentResults.filter(r => r.result === 'deepfake').length;
+  
+  // Show only first 5 in recent activity section
+  const displayResults = recentResults.slice(0, 5);
+
   const getResultBadge = (result: 'authentic' | 'deepfake') => {
     return result === 'authentic' ? (
       <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100">
@@ -52,7 +60,7 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground">Total Scans</p>
-                    <p className="text-2xl font-bold">{recentResults.length}</p>
+                    <p className="text-2xl font-bold">{totalScans}</p>
                   </div>
                   <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
                     <FileText className="h-6 w-6 text-blue-600" />
@@ -66,9 +74,7 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground">Authentic</p>
-                    <p className="text-2xl font-bold text-green-600">
-                      {recentResults.filter(r => r.result === 'authentic').length}
-                    </p>
+                    <p className="text-2xl font-bold text-green-600">{authenticCount}</p>
                   </div>
                   <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
                     <Shield className="h-6 w-6 text-green-600" />
@@ -82,9 +88,7 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground">Deepfakes</p>
-                    <p className="text-2xl font-bold text-red-600">
-                      {recentResults.filter(r => r.result === 'deepfake').length}
-                    </p>
+                    <p className="text-2xl font-bold text-red-600">{deepfakeCount}</p>
                   </div>
                   <div className="h-12 w-12 bg-red-100 rounded-lg flex items-center justify-center">
                     <TrendingUp className="h-6 w-6 text-red-600" />
@@ -126,13 +130,13 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {recentResults.length === 0 ? (
+                  {displayResults.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <p>No detection activity yet.</p>
                       <p className="text-sm">Upload your first media file to get started!</p>
                     </div>
                   ) : (
-                    recentResults.map((result) => (
+                    displayResults.map((result) => (
                       <div key={result.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                         <div className="flex-1">
                           <p className="font-medium text-sm truncate">{result.fileName}</p>
@@ -146,7 +150,7 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
                     ))
                   )}
                   
-                  {recentResults.length > 0 && (
+                  {recentResults.length > 5 && (
                     <Button 
                       variant="outline" 
                       className="w-full mt-4"

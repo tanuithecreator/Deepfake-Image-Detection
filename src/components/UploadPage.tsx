@@ -1,88 +1,49 @@
-import { useState, useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Navigation } from './Navigation';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
 import { Alert, AlertDescription } from './ui/alert';
-import { Badge } from './ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Separator } from './ui/separator';
-import { Upload, FileText, Image, Video, CheckCircle, AlertCircle, Zap, Brain, X, Clock, Target, Cpu, Shield, Crown } from 'lucide-react';
+import { Upload, FileText, Image, Video, CheckCircle, AlertCircle, Zap, Brain, X, Clock, Target, Cpu, Shield, Link, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import type { DetectionResult, DetectionModel, User } from '../App';
+import type { DetectionResult, User } from '../App';
+import { api, USE_MOCK_API } from '../services/api';
+import { MockApiService } from '../services/mockApi';
 
 interface UploadPageProps {
   navigate: (page: string) => void;
   user: User | null;
   logout: () => void;
   addDetectionResult: (result: DetectionResult) => void;
+  onViewResult: (result: DetectionResult) => void;
 }
 
-// Available detection models
-const DETECTION_MODELS: DetectionModel[] = [
-  {
-    id: 'fast-cnn',
-    name: 'FastDetect',
-    version: 'v2.1',
-    description: 'Speed',
-    accuracy: 85,
-    speed: 'fast',
-    speciality: 'Quick screening and basic detection',
-    processingTime: '5-15 seconds',
-    recommendedFor: ['Quick checks', 'Batch processing', 'Real-time screening'],
-  },
-  {
-    id: 'standard-ensemble',
-    name: 'Standard',
-    version: 'v3.0',
-    description: 'Balanced',
-    accuracy: 92,
-    speed: 'medium',
-    speciality: 'General-purpose detection with good balance',
-    processingTime: '30-60 seconds',
-    recommendedFor: ['General use', 'Social media content', 'News verification'],
-  },
-  {
-    id: 'high-accuracy-transformer',
-    name: 'DeepAnalysis',
-    version: 'v4.2',
-    description: 'Accuracy',
-    accuracy: 96,
-    speed: 'slow',
-    speciality: 'Maximum precision for critical applications',
-    processingTime: '2-5 minutes',
-    recommendedFor: ['Legal evidence', 'Forensic analysis', 'High-stakes verification'],
-    isPremium: true,
-  },
-  {
-    id: 'video-specialist',
-    name: 'VideoGuard',
-    version: 'v2.8',
-    description: 'Video',
-    accuracy: 94,
-    speed: 'slow',
-    speciality: 'Video-specific features and temporal analysis',
-    processingTime: '1-3 minutes',
-    recommendedFor: ['Video content', 'Streaming media', 'Temporal inconsistencies'],
-  },
-];
-
-export function UploadPage({ navigate, user, logout, addDetectionResult }: UploadPageProps) {
+export function UploadPage({ navigate, user, logout, addDetectionResult, onViewResult }: UploadPageProps) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<DetectionModel | null>(DETECTION_MODELS[0]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [inputMode, setInputMode] = useState<'file' | 'url'>('file');
+  const [imageUrl, setImageUrl] = useState('');
+  const [urlPreview, setUrlPreview] = useState<string | null>(null);
+  const [validatingUrl, setValidatingUrl] = useState(false);
+  const urlValidationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const acceptedTypes = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/mov', 'video/avi'];
+  const acceptedTypes = [
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp',
+    'video/mp4', 'video/mov', 'video/avi', 'video/mkv', 'video/webm', 'video/flv', 'video/wmv'
+  ];
   const maxFileSize = 50 * 1024 * 1024; // 50MB
+
+const mockApiInstance = USE_MOCK_API ? new MockApiService() : null;
 
   const validateFile = (file: File) => {
     if (!acceptedTypes.includes(file.type)) {
-      return 'Please upload a valid image (JPEG, PNG, WebP) or video (MP4, MOV, AVI) file.';
+      return 'Please upload a valid image (JPEG, PNG, WebP, GIF, BMP) or video (MP4, MOV, AVI, MKV, WebM, FLV, WMV) file.';
     }
     if (file.size > maxFileSize) {
       return 'File size must be less than 50MB.';
@@ -121,10 +82,6 @@ export function UploadPage({ navigate, user, logout, addDetectionResult }: Uploa
     setDragOver(false);
   };
 
-  const handleModelSelect = (model: DetectionModel) => {
-    setSelectedModel(model);
-  };
-
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
@@ -140,53 +97,250 @@ export function UploadPage({ navigate, user, logout, addDetectionResult }: Uploa
     }
   };
 
-  const startDetection = async () => {
-    if (!file || !selectedModel) return;
+  const validateAndPreviewUrl = async (url: string) => {
+    if (!url.trim()) {
+      setUrlPreview(null);
+      setError(null);
+      return;
+    }
 
-    setUploading(true);
-    setProgress(0);
-
-    // Simulate upload progress based on model speed
-    const uploadSpeed = selectedModel.speed === 'fast' ? 100 : selectedModel.speed === 'medium' ? 150 : 250;
-
-    const uploadInterval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(uploadInterval);
-          setUploading(false);
-          setAnalyzing(true);
-          
-          // Simulate analysis time based on model processing time
-          const analysisTime = selectedModel.speed === 'fast' ? 2000 : selectedModel.speed === 'medium' ? 4000 : 6000;
-          
-          setTimeout(() => {
-            // Generate more realistic results based on model accuracy
-            const isDeepfake = Math.random() > 0.6;
-            const baseConfidence = selectedModel.accuracy;
-            const variance = selectedModel.speed === 'fast' ? 15 : selectedModel.speed === 'medium' ? 10 : 5;
-            const confidence = Math.min(99, Math.max(70, baseConfidence + (Math.random() - 0.5) * variance));
-            
-            const mockResult: DetectionResult = {
-              id: Date.now().toString(),
-              fileName: file.name,
-              date: new Date().toISOString().split('T')[0],
-              result: isDeepfake ? 'deepfake' : 'authentic',
-              confidence: Math.floor(confidence),
-              fileUrl: URL.createObjectURL(file),
-              modelUsed: selectedModel.name,
-              processingTime: analysisTime / 1000
-            };
-            
-            addDetectionResult(mockResult);
-            setAnalyzing(false);
-            navigate('results');
-          }, analysisTime);
-          
-          return 100;
+    try {
+      let processedUrl = url.trim();
+      
+      // Check if it's raw base64 data (starts with base64 characters but no data: prefix)
+      // Base64 pattern: alphanumeric, +, /, =, and may contain whitespace/newlines
+      const base64Pattern = /^[A-Za-z0-9+/=\s\n\r]+$/;
+      const cleanedUrl = processedUrl.replace(/\s/g, '').replace(/\n/g, '').replace(/\r/g, '');
+      
+      // Check if it looks like raw base64 (no protocol, matches base64 pattern, reasonable length)
+      const isRawBase64 = !processedUrl.startsWith('data:') && 
+                          !processedUrl.startsWith('http://') && 
+                          !processedUrl.startsWith('https://') &&
+                          base64Pattern.test(processedUrl) &&
+                          cleanedUrl.length >= 20; // Minimum for base64 image (even small images)
+      
+      // If it's raw base64, prepend the data URL prefix (assume JPEG)
+      if (isRawBase64) {
+        processedUrl = `data:image/jpeg;base64,${cleanedUrl}`;
+        console.log('[URL] Detected raw base64, prepended data URL prefix. Length:', cleanedUrl.length);
+      }
+      
+      // Check if it's a base64 data URL
+      const isBase64 = processedUrl.startsWith('data:image/');
+      
+      if (isBase64) {
+        // Validate base64 format - use DOTALL flag to match newlines
+        const base64Match = processedUrl.match(/^data:image\/(\w+);base64,(.+)$/s);
+        if (!base64Match) {
+          setError('Invalid base64 image format. Expected: data:image/[type];base64,[data]');
+          setUrlPreview(null);
+          setValidatingUrl(false);
+          return;
         }
-        return prev + 10;
-      });
-    }, uploadSpeed);
+        
+        const imageType = base64Match[1].toLowerCase();
+        const allowedTypes = ['jpeg', 'jpg', 'png', 'gif', 'webp', 'bmp'];
+        if (!allowedTypes.includes(imageType)) {
+          setError(`Unsupported image type: ${imageType}. Supported: ${allowedTypes.join(', ')}`);
+          setUrlPreview(null);
+          setValidatingUrl(false);
+          return;
+        }
+        
+        // Extract and clean base64 data (remove whitespace/newlines)
+        const base64Data = base64Match[2].trim().replace(/\n/g, '').replace(/\r/g, '').replace(/ /g, '');
+        
+        // Check size (approximate - base64 is ~33% larger than binary)
+        const sizeInBytes = (base64Data.length * 3) / 4;
+        if (sizeInBytes > 16 * 1024 * 1024) {
+          setError('Image too large (max 16MB)');
+          setUrlPreview(null);
+          setValidatingUrl(false);
+          return;
+        }
+        
+        setValidatingUrl(true);
+        setError(null);
+        
+        // Try to load image for preview
+        const img = document.createElement('img');
+        await new Promise((resolve, reject) => {
+          img.onload = () => {
+            setUrlPreview(processedUrl);
+            setImageUrl(processedUrl); // Update the input with the processed URL
+            setValidatingUrl(false);
+            resolve(null);
+          };
+          img.onerror = () => {
+            setError('Invalid base64 image data. Please check the image address.');
+            setUrlPreview(null);
+            setValidatingUrl(false);
+            reject(new Error('Image load failed'));
+          };
+          img.src = processedUrl;
+        });
+      } else {
+        // Regular HTTP/HTTPS URL
+        const urlObj = new URL(processedUrl);
+        if (!['http:', 'https:'].includes(urlObj.protocol)) {
+          setError('Only HTTP, HTTPS URLs, or base64 data URLs are supported');
+          setUrlPreview(null);
+          return;
+        }
+
+        setValidatingUrl(true);
+        setError(null);
+
+        // Try to load image for preview
+        const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
+        
+        await new Promise((resolve, reject) => {
+          img.onload = () => {
+            setUrlPreview(processedUrl);
+            setImageUrl(processedUrl); // Update the input with the processed URL
+            setValidatingUrl(false);
+            resolve(null);
+          };
+          img.onerror = () => {
+            setError('Could not load image from URL. Please check the URL is valid and accessible.');
+            setUrlPreview(null);
+            setValidatingUrl(false);
+            reject(new Error('Image load failed'));
+          };
+          img.src = processedUrl;
+        });
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error('[URL Validation Error]', errorMsg);
+      
+      // Provide more helpful error message
+      if (url.trim().length > 20 && !url.includes('://') && !url.startsWith('data:')) {
+        setError('Invalid base64 format. If pasting base64 data, ensure it includes the full data URL prefix: data:image/[type];base64,[data]');
+      } else {
+        setError('Invalid image address format. Please enter a valid HTTP/HTTPS URL or base64 data URL (data:image/...).');
+      }
+      setUrlPreview(null);
+      setValidatingUrl(false);
+    }
+  };
+
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const url = e.target.value;
+    setImageUrl(url);
+    
+    // Clear previous timeout
+    if (urlValidationTimeoutRef.current) {
+      clearTimeout(urlValidationTimeoutRef.current);
+    }
+    
+    // Debounce URL validation
+    urlValidationTimeoutRef.current = setTimeout(() => {
+      validateAndPreviewUrl(url);
+    }, 500);
+  };
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (urlValidationTimeoutRef.current) {
+        clearTimeout(urlValidationTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const startDetection = async () => {
+    if (inputMode === 'url') {
+      if (!imageUrl.trim()) {
+        setError('Please enter an image URL.');
+        return;
+      }
+      
+      if (!urlPreview) {
+        setError('Please wait for URL validation to complete.');
+        return;
+      }
+      
+      setError(null);
+      setUploading(true);
+      setAnalyzing(true);
+      setProgress(0);
+
+      try {
+        let detection: DetectionResult | null = null;
+
+        if (USE_MOCK_API && mockApiInstance) {
+          // Mock API doesn't support URL yet, use file upload simulation
+          const response = await mockApiInstance.detectDeepfake(new File([], 'url-image.jpg'), setProgress);
+          detection = {
+            ...response.result,
+            confidence: response.result.confidence,
+          };
+        } else {
+          const response = await api.detectDeepfakeFromUrl(imageUrl, setProgress);
+          detection = response;
+        }
+
+        if (detection) {
+          await addDetectionResult(detection);
+          setImageUrl('');
+          setUrlPreview(null);
+          onViewResult(detection);
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to analyze the image from URL. Please try again.',
+        );
+      } finally {
+        setUploading(false);
+        setAnalyzing(false);
+        setProgress(0);
+      }
+    } else {
+      if (!file) {
+        setError('Please select a file to analyze.');
+        return;
+      }
+      
+      setError(null);
+      setUploading(true);
+      setAnalyzing(true);
+      setProgress(0);
+
+      try {
+        let detection: DetectionResult | null = null;
+
+        if (USE_MOCK_API && mockApiInstance) {
+          const response = await mockApiInstance.detectDeepfake(file, setProgress);
+          detection = {
+            ...response.result,
+            confidence: response.result.confidence,
+          };
+        } else {
+          const response = await api.detectDeepfake(file, setProgress);
+          detection = response;
+        }
+
+        if (detection) {
+          await addDetectionResult(detection);
+          removeFile();
+          onViewResult(detection);
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to analyze the file. Please try again.',
+        );
+      } finally {
+        setUploading(false);
+        setAnalyzing(false);
+        setProgress(0);
+      }
+    }
   };
 
   const getFileIcon = () => {
@@ -249,8 +403,111 @@ export function UploadPage({ navigate, user, logout, addDetectionResult }: Uploa
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="relative z-10">
+                  {/* Mode Toggle */}
+                  <div className="mb-6 flex gap-2 border-b border-gray-200 pb-4">
+                    <Button
+                      variant={inputMode === 'file' ? 'default' : 'ghost'}
+                      onClick={() => {
+                        setInputMode('file');
+                        setImageUrl('');
+                        setUrlPreview(null);
+                        setError(null);
+                      }}
+                      className="flex-1"
+                      disabled={uploading || analyzing}
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Upload File
+                    </Button>
+                    <Button
+                      variant={inputMode === 'url' ? 'default' : 'ghost'}
+                      onClick={() => {
+                        setInputMode('url');
+                        setFile(null);
+                        setError(null);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }}
+                      className="flex-1"
+                      disabled={uploading || analyzing}
+                    >
+                      <Link className="h-4 w-4 mr-2" />
+                      Enter URL
+                    </Button>
+                  </div>
+
                   <AnimatePresence mode="wait">
-                    {!file ? (
+                    {inputMode === 'url' ? (
+                      <motion.div
+                        key="url-input"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        transition={{ duration: 0.3 }}
+                        className="space-y-4"
+                      >
+                        <div>
+                          <label className="block text-sm font-medium mb-2">
+                            Image URL
+                          </label>
+                          <Input
+                            type="url"
+                            placeholder="https://example.com/image.jpg"
+                            value={imageUrl}
+                            onChange={handleUrlChange}
+                            disabled={uploading || analyzing}
+                          />
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Enter an image URL (http/https) or base64 data URL (data:image/...)
+                          </p>
+                        </div>
+
+                        {validatingUrl && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <RefreshCw className="h-4 w-4 animate-spin" />
+                            Validating URL...
+                          </div>
+                        )}
+
+                        {urlPreview && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="rounded-lg overflow-hidden border border-gray-200"
+                          >
+                            <img
+                              src={urlPreview}
+                              alt="Preview"
+                              className="w-full h-auto max-h-96 object-contain"
+                              onError={() => {
+                                setError('Failed to load image preview');
+                                setUrlPreview(null);
+                              }}
+                            />
+                          </motion.div>
+                        )}
+
+                        <Button
+                          onClick={startDetection}
+                          disabled={!urlPreview || uploading || analyzing || !imageUrl.trim()}
+                          className="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700"
+                          size="lg"
+                        >
+                          {analyzing ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Analyzing...
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="h-4 w-4 mr-2" />
+                              Analyze Image
+                            </>
+                          )}
+                        </Button>
+                      </motion.div>
+                    ) : !file ? (
                       <motion.div
                         key="upload-zone"
                         initial={{ opacity: 0, scale: 0.95 }}
@@ -414,88 +671,27 @@ export function UploadPage({ navigate, user, logout, addDetectionResult }: Uploa
                           )}
                         </AnimatePresence>
 
-                        {/* Model Selection */}
+                        {/* Action Button */}
                         {!uploading && !analyzing && (
                           <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: 0.1 }}
-                            className="space-y-4"
+                            className="pt-4"
                           >
-                            <Separator className="my-6" />
-                            
-                            <div className="space-y-4">
-                              <div className="flex items-center gap-2">
-                                <Brain className="h-5 w-5 text-blue-600" />
-                                <h3 className="text-lg font-semibold text-gray-800">
-                                  Choose Detection Model
-                                </h3>
-                              </div>
-                              
-                              <Select value={selectedModel?.id} onValueChange={(value) => {
-                                const model = DETECTION_MODELS.find(m => m.id === value);
-                                if (model) setSelectedModel(model);
-                              }}>
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select a model">
-                                    {selectedModel && (
-                                      <div className="flex items-center gap-2">
-                                        <span>{selectedModel.name}</span>
-                                        <Badge variant="outline" className="text-xs">
-                                          {selectedModel.description}
-                                        </Badge>
-                                        {selectedModel.isPremium && (
-                                          <Badge className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-yellow-900 text-xs">
-                                            <Crown className="w-3 h-3 mr-1" />
-                                            Pro
-                                          </Badge>
-                                        )}
-                                      </div>
-                                    )}
-                                  </SelectValue>
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {DETECTION_MODELS.map((model) => (
-                                    <SelectItem key={model.id} value={model.id}>
-                                      <div className="flex items-center gap-2">
-                                        <span>{model.name}</span>
-                                        <Badge variant="outline" className="text-xs">
-                                          {model.description}
-                                        </Badge>
-                                        {model.isPremium && (
-                                          <Badge className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-yellow-900 text-xs">
-                                            <Crown className="w-3 h-3 mr-1" />
-                                            Pro
-                                          </Badge>
-                                        )}
-                                      </div>
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            
-                            {/* Action Button */}
                             <motion.div
-                              initial={{ opacity: 0, y: 20 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: 0.2 }}
-                              className="pt-4"
+                              whileHover={{ scale: 1.02 }}
+                              whileTap={{ scale: 0.98 }}
                             >
-                              <motion.div
-                                whileHover={{ scale: 1.02 }}
-                                whileTap={{ scale: 0.98 }}
+                              <Button 
+                                onClick={startDetection}
+                                disabled={!file || uploading}
+                                className="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700 text-lg py-4 h-auto shadow-xl hover:shadow-2xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                                size="lg"
                               >
-                                <Button 
-                                  onClick={startDetection}
-                                  disabled={!selectedModel}
-                                  className="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700 text-lg py-4 h-auto shadow-xl hover:shadow-2xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                                  size="lg"
-                                >
-                                  <Brain className="h-5 w-5 mr-2" />
-                                  Start {selectedModel?.name || 'AI'} Detection
-                                </Button>
-                              </motion.div>
+                                <Brain className="h-5 w-5 mr-2" />
+                                Start AI Detection
+                              </Button>
                             </motion.div>
                           </motion.div>
                         )}

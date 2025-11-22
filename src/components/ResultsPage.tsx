@@ -12,7 +12,8 @@ import {
   FileText,
   CheckCircle,
   XCircle,
-  Info
+  Info,
+  Target
 } from 'lucide-react';
 import type { DetectionResult, User } from '../App';
 
@@ -25,6 +26,15 @@ interface ResultsPageProps {
 
 export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps) {
   const isAuthentic = result.result === 'authentic';
+  
+  // Debug logging for GRAD-CAM
+  console.log('[ResultsPage] Rendering with result:', {
+    has_gradcam: !!result.gradcamHeatmap,
+    gradcam_length: result.gradcamHeatmap?.length || 0,
+    gradcam_preview: result.gradcamHeatmap?.substring(0, 50) || 'none',
+    result_id: result.id,
+    result_fileName: result.fileName
+  });
   
   const getConfidenceColor = (confidence: number) => {
     if (confidence >= 90) return 'text-green-600';
@@ -39,26 +49,32 @@ export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps
     return 'Low';
   };
 
-  const downloadReport = () => {
-    const reportData = {
-      fileName: result.fileName,
-      analysisDate: new Date().toISOString(),
-      result: result.result,
-      confidence: result.confidence,
-      details: {
-        algorithm: 'DeepDetect AI v2.1',
-        analysisTime: '2.3 seconds',
-        featuresAnalyzed: ['Facial landmarks', 'Texture consistency', 'Temporal coherence', 'Compression artifacts']
-      }
-    };
+  const downloadReport = async () => {
+    try {
+      const response = await fetch(`/api/report/${result.id}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
+        },
+      });
 
-    const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `deepdetect-report-${result.fileName}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+      if (!response.ok) {
+        throw new Error('Failed to generate report');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `deepdetect-report-${result.fileName.replace(/\.[^/.]+$/, '')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading report:', error);
+      alert('Failed to download report. Please try again.');
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -125,6 +141,71 @@ export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* GRAD-CAM Visualization */}
+                {result.gradcamHeatmap && (
+                  <Card className="border-0 shadow-lg">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Target className="h-5 w-5 text-blue-600" />
+                        Model Attention Heatmap (GRAD-CAM)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          This visualization shows which regions of the image the AI model focused on when making its prediction. 
+                          Red/yellow areas indicate high attention, while blue areas indicate lower attention.
+                        </p>
+                        <div className="rounded-lg overflow-hidden border border-gray-200">
+                          <img 
+                            src={result.gradcamHeatmap} 
+                            alt="GRAD-CAM Heatmap" 
+                            className="w-full h-auto"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground italic">
+                          The heatmap helps explain the model's decision-making process, making the AI more transparent and interpretable.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Video Analysis Summary */}
+                {result.videoAnalysis && (
+                  <Card className="border-0 shadow-lg">
+                    <CardHeader>
+                      <CardTitle>Video Analysis Summary</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-3 bg-blue-50 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Total Frames</p>
+                          <p className="text-2xl font-bold text-blue-600">{result.videoAnalysis.total_frames}</p>
+                        </div>
+                        <div className="p-3 bg-green-50 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Real Frames</p>
+                          <p className="text-2xl font-bold text-green-600">{result.videoAnalysis.real_frames}</p>
+                        </div>
+                        <div className="p-3 bg-red-50 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Fake Frames</p>
+                          <p className="text-2xl font-bold text-red-600">{result.videoAnalysis.fake_frames}</p>
+                        </div>
+                        <div className="p-3 bg-yellow-50 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Fake Ratio</p>
+                          <p className="text-2xl font-bold text-yellow-600">
+                            {Math.round(result.videoAnalysis.fake_ratio * 100)}%
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-4">
+                        Video analyzed frame-by-frame. {result.videoAnalysis.total_frames} frames processed 
+                        ({Math.round(result.videoAnalysis.fake_ratio * 100)}% detected as fake).
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {/* Detailed Analysis */}
                 <Card className="border-0 shadow-lg">
