@@ -57,7 +57,7 @@ let mockDetectionResults: DetectionResult[] = [
     result: 'deepfake',
     confidence: 87,
     userId: '1',
-    modelUsed: 'Standard',
+    modelUsed: 'Combined ResNet18',
     processingTime: 45
   },
   {
@@ -67,7 +67,7 @@ let mockDetectionResults: DetectionResult[] = [
     result: 'authentic',
     confidence: 94,
     userId: '2',
-    modelUsed: 'VideoGuard',
+    modelUsed: 'Combined ResNet18',
     processingTime: 120
   },
   {
@@ -77,57 +77,9 @@ let mockDetectionResults: DetectionResult[] = [
     result: 'authentic',
     confidence: 98,
     userId: '1',
-    modelUsed: 'FastDetect',
+    modelUsed: 'Combined ResNet18',
     processingTime: 12
   }
-];
-
-const MOCK_MODELS: DetectionModel[] = [
-  {
-    id: 'fast-cnn',
-    name: 'FastDetect',
-    version: 'v2.1',
-    description: 'Speed',
-    accuracy: 85,
-    speed: 'fast',
-    speciality: 'Quick screening and basic detection',
-    processingTime: '5-15 seconds',
-    recommendedFor: ['Quick checks', 'Batch processing', 'Real-time screening'],
-  },
-  {
-    id: 'standard-ensemble',
-    name: 'Standard',
-    version: 'v3.0',
-    description: 'Balanced',
-    accuracy: 92,
-    speed: 'medium',
-    speciality: 'General-purpose detection with good balance',
-    processingTime: '30-60 seconds',
-    recommendedFor: ['General use', 'Social media content', 'News verification'],
-  },
-  {
-    id: 'high-accuracy-transformer',
-    name: 'DeepAnalysis',
-    version: 'v4.2',
-    description: 'Accuracy',
-    accuracy: 96,
-    speed: 'slow',
-    speciality: 'Maximum precision for critical applications',
-    processingTime: '2-5 minutes',
-    recommendedFor: ['Legal evidence', 'Forensic analysis', 'High-stakes verification'],
-    isPremium: true,
-  },
-  {
-    id: 'video-specialist',
-    name: 'VideoGuard',
-    version: 'v2.8',
-    description: 'Video',
-    accuracy: 94,
-    speed: 'slow',
-    speciality: 'Video-specific features and temporal analysis',
-    processingTime: '1-3 minutes',
-    recommendedFor: ['Video content', 'Streaming media', 'Temporal inconsistencies'],
-  },
 ];
 
 let currentUser: User | null = null;
@@ -236,14 +188,8 @@ export class MockApiService {
 
   async detectDeepfake(
     file: File,
-    modelId: string,
     onProgress?: (progress: number) => void
   ) {
-    const model = MOCK_MODELS.find(m => m.id === modelId);
-    if (!model) {
-      throw new Error('Invalid model');
-    }
-
     // Simulate upload progress
     if (onProgress) {
       for (let i = 0; i <= 100; i += 10) {
@@ -252,15 +198,15 @@ export class MockApiService {
       }
     }
 
-    // Simulate processing time based on model
-    const processingTime = model.speed === 'fast' ? 2000 : model.speed === 'medium' ? 4000 : 6000;
+    // Simulate processing time (Combined ResNet18 processing)
+    const processingTime = 4000;
     await delay(processingTime);
 
     // Generate realistic result
     const isDeepfake = Math.random() > 0.6;
-    const baseConfidence = model.accuracy;
-    const variance = model.speed === 'fast' ? 15 : model.speed === 'medium' ? 10 : 5;
-    const confidence = Math.min(99, Math.max(70, baseConfidence + (Math.random() - 0.5) * variance));
+    const baseConfidence = 95; // High accuracy for Combined ResNet18
+    const variance = 5; // Low variance for combined model
+    const confidence = Math.min(99, Math.max(85, baseConfidence + (Math.random() - 0.5) * variance));
 
     const result: DetectionResult = {
       id: Date.now().toString(),
@@ -270,7 +216,7 @@ export class MockApiService {
       confidence: Math.floor(confidence),
       fileUrl: URL.createObjectURL(file),
       userId: currentUser?.id,
-      modelUsed: model.name,
+      modelUsed: 'Combined ResNet18',
       processingTime: processingTime / 1000
     };
 
@@ -279,8 +225,41 @@ export class MockApiService {
     return {
       result,
       processingTime: processingTime / 1000,
-      modelVersion: model.version
+      modelVersion: 'v2.0.0'
     };
+  }
+
+  async detectDeepfakeFromUrl(url: string, onProgress?: UploadProgressCallback): Promise<DetectionResult> {
+    // Simulate URL download and analysis
+    if (onProgress) {
+      for (let i = 0; i <= 100; i += 10) {
+        await delay(100);
+        onProgress(i);
+      }
+    }
+
+    const processingTime = 4000;
+    await delay(processingTime);
+
+    const isDeepfake = Math.random() > 0.6;
+    const baseConfidence = 95;
+    const variance = 5;
+    const confidence = Math.min(99, Math.max(85, baseConfidence + (Math.random() - 0.5) * variance));
+
+    const result: DetectionResult = {
+      id: Date.now().toString(),
+      fileName: url.split('/').pop() || 'image_from_url.jpg',
+      date: new Date().toISOString().split('T')[0],
+      result: isDeepfake ? 'deepfake' : 'authentic',
+      confidence: Math.floor(confidence),
+      fileUrl: url,
+      userId: currentUser?.id,
+      modelUsed: 'Combined ResNet18',
+      processingTime: processingTime / 1000
+    };
+
+    mockDetectionResults.unshift(result);
+    return result;
   }
 
   async getDetectionResult(resultId: string) {
@@ -310,24 +289,6 @@ export class MockApiService {
   async deleteDetectionResult(resultId: string) {
     await delay(300);
     mockDetectionResults = mockDetectionResults.filter(r => r.id !== resultId);
-  }
-
-  // ==================== Models ====================
-
-  async getAvailableModels() {
-    await delay(300);
-    return MOCK_MODELS;
-  }
-
-  async getModelDetails(modelId: string) {
-    await delay(300);
-    
-    const model = MOCK_MODELS.find(m => m.id === modelId);
-    if (!model) {
-      throw new Error('Model not found');
-    }
-
-    return model;
   }
 
   // ==================== User Management ====================
