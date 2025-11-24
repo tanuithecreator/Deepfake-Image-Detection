@@ -1,4 +1,4 @@
-# NewsSight: An Optimized CNN for Deepfake Video and Image Detection
+# DeepDetect: An Optimized CNN for Deepfake Video and Image Detection
 
 **Technical Defense Report**  
 **Student:** Julian Tanui  
@@ -29,16 +29,17 @@ DeepDetect is an explainable deep-learning system designed to detect forged imag
 
 ## 2.1 Data Strategy
 
-### Dataset: Combined Dataset (Real-World Detection)
+### Dataset: 140k Real and Fake Faces
 
-The model was trained on a combined dataset consisting of **140,000 real and fake images**, incorporating cross-validation with FaceForensics++ to ensure robust generalization. The dataset was carefully curated to represent diverse manipulation techniques and real-world scenarios, enabling the model to detect deepfakes across various quality levels and manipulation methods.
+The model was trained on a dataset consisting of **140,000 real and fake face images**, validated against the FaceForensics++ benchmark to ensure robust generalization. The dataset was carefully curated to represent diverse manipulation techniques and real-world scenarios, enabling the model to detect deepfakes across various quality levels and manipulation methods.
 
 **Dataset Composition:**
 - Total images: 140,000
-- Training set: 85% (119,000 images)
+- Training set: 70% (98,000 images)
 - Validation set: 15% (21,000 images)
-- Balanced distribution of real and fake samples(50/50)
-- Cross-validation with FaceForensics++ benchmark
+- Test set: 15% (21,000 images)
+- Balanced distribution of real and fake samples (50/50)
+- Validated against FaceForensics++ benchmark
 
 ---
 
@@ -114,13 +115,13 @@ The system employs a **ResNet50** architecture optimized for deepfake detection:
 
 The model was evaluated on a test set of **21,000 images (15% of 140k dataset)**. The following table presents comprehensive performance metrics:
 
-| Metric | Score | Description |
-|--------|-------|-------------|
-| **Accuracy** | **94.12%** | Overall correct predictions |
-| **Precision** | **0.945** | When model predicts "Fake", it is usually correct |
-| **Recall** | **0.938** | The model detects 93.8% of all actual fakes |
-| **F1 Score** | **0.941** | Harmonic balance between Precision and Recall |
-| **AUC (Area Under the Curve)** | **0.982** | Excellent separability between Real and Fake classes |
+| Metric | Score |
+|--------|-------|
+| **Accuracy** | **94.12%** |
+| **Precision** | **0.945** |
+| **Recall** | **0.938** |
+| **F1 Score** | **0.941** |
+| **AUC (Area Under the Curve)** | **0.982** |
 
 **Performance Analysis:**
 - The model achieves **94.12% accuracy**, demonstrating strong overall classification performance
@@ -217,7 +218,7 @@ The system is built with a modern full-stack architecture:
   "analysis": {
     "prediction": "FAKE",
     "confidence": 0.92,
-    "model": "Combined ResNet18"
+    "model": "Combined ResNet50"
   },
   "gradcam_heatmap": "base64_encoded_image",
   "face_detected": true,
@@ -273,7 +274,7 @@ The system is built with a modern full-stack architecture:
 
 **Solutions:**
 - Optimized video processing with frame sampling (1 FPS, max 30 frames)
-- Efficient model architecture (ResNet18) for CPU inference
+- Efficient model architecture (ResNet50) for CPU inference
 - Cloud deployment options for GPU acceleration when available
 
 ## 8.4 Deployment Challenges
@@ -302,7 +303,7 @@ The system is built with a modern full-stack architecture:
 
 ## 9.2 Medium-Term Enhancements
 
-- **Model ensemble**: Combine ResNet18 with ConvNeXt or EfficientNet architectures
+- **Model ensemble**: Combine ResNet50 with ConvNeXt or EfficientNet architectures
 - **ONNX Runtime conversion**: Improve inference speed and cross-platform compatibility
 - **Temporal video models**: Implement LSTM/Transformer for video sequence analysis
 - **Active learning**: Continuously improve model with user feedback
@@ -319,7 +320,7 @@ The system is built with a modern full-stack architecture:
 
 # 10. Conclusion
 
-NewsSight (DeepDetect) demonstrates a complete applied deep-learning system capable of detecting forged images and videos with **explainability**, **scalability**, and **production readiness**. The system successfully bridges the gap between research-grade deepfake detection and practical real-world deployment.
+DeepDetect demonstrates a complete applied deep-learning system capable of detecting forged images and videos with **explainability**, **scalability**, and **production readiness**. The system successfully bridges the gap between research-grade deepfake detection and practical real-world deployment.
 
 **Key Achievements:**
 - **High accuracy detection**: 94.12% accuracy with 0.982 AUC score
@@ -338,7 +339,7 @@ NewsSight (DeepDetect) demonstrates a complete applied deep-learning system capa
 ## 11.1 Deliverables Checklist
 
 - ✅ Dataset manifests and documentation
-- ✅ CNN training pipeline (ResNet18)
+- ✅ CNN training pipeline (ResNet50)
 - ✅ Comprehensive evaluation metrics
 - ✅ GRAD-CAM batch generation and visualization
 - ✅ Video detection system with frame aggregation
