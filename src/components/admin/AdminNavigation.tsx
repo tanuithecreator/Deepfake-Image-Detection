@@ -15,7 +15,9 @@ import {
   Shield, 
   LogOut,
   User,
-  Crown
+  Crown,
+  FolderOpen,
+  FileText
 } from 'lucide-react';
 import type { User as UserType } from '../../App';
 
@@ -30,6 +32,8 @@ export function AdminNavigation({ navigate, currentPage, user, logout }: AdminNa
   const navItems = [
     { id: 'admin-dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'admin-users', label: 'User Management', icon: Users },
+    { id: 'admin-files', label: 'File Management', icon: FolderOpen },
+    { id: 'admin-logs', label: 'System Logs', icon: FileText },
     { id: 'admin-analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'admin-settings', label: 'System Settings', icon: Settings },
   ];

@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger 
 } from '../ui/dropdown-menu';
 import type { User } from '../../App';
+import { formatDateShort } from '../../utils/dateUtils';
 
 interface AdminUserManagementProps {
   navigate: (page: string) => void;
@@ -57,7 +58,9 @@ export function AdminUserManagement({ navigate, user, logout, users, setUsers }:
     .filter(user => {
       const matchesSearch = user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                            user.email.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesFilter = filterStatus === 'all' || user.status === filterStatus;
+      // Ensure status comparison handles null/undefined and is case-insensitive
+      const userStatus = (user.status || 'active').toLowerCase();
+      const matchesFilter = filterStatus === 'all' || userStatus === filterStatus.toLowerCase();
       return matchesSearch && matchesFilter;
     })
     .sort((a, b) => {
@@ -75,25 +78,38 @@ export function AdminUserManagement({ navigate, user, logout, users, setUsers }:
       }
     });
 
-  const toggleUserStatus = (userId: string) => {
-    const updatedUsers = users.map(u => {
-      if (u.id === userId) {
-        const newStatus = u.status === 'active' ? 'suspended' : 'active';
-        setShowAlert(`User ${newStatus === 'active' ? 'activated' : 'suspended'} successfully`);
-        setTimeout(() => setShowAlert(null), 3000);
-        return { ...u, status: newStatus };
-      }
-      return u;
-    });
-    setUsers(updatedUsers);
+  const toggleUserStatus = async (userId: string) => {
+    try {
+      const { api } = await import('../../services/api');
+      const result = await api.toggleUserStatus(userId);
+      const updatedUsers = users.map(u => {
+        if (u.id === userId) {
+          return { ...u, status: result.status as 'active' | 'suspended' };
+        }
+        return u;
+      });
+      setUsers(updatedUsers);
+      setShowAlert(`User ${result.status === 'active' ? 'activated' : 'suspended'} successfully`);
+      setTimeout(() => setShowAlert(null), 3000);
+    } catch (error) {
+      setShowAlert(`Failed to update user status: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setTimeout(() => setShowAlert(null), 3000);
+    }
   };
 
-  const deleteUser = (userId: string) => {
+  const deleteUser = async (userId: string) => {
     if (confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
-      const updatedUsers = users.filter(u => u.id !== userId);
-      setUsers(updatedUsers);
-      setShowAlert('User deleted successfully');
-      setTimeout(() => setShowAlert(null), 3000);
+      try {
+        const { api } = await import('../../services/api');
+        await api.deleteUser(userId);
+        const updatedUsers = users.filter(u => u.id !== userId);
+        setUsers(updatedUsers);
+        setShowAlert('User deleted successfully');
+        setTimeout(() => setShowAlert(null), 3000);
+      } catch (error) {
+        setShowAlert(`Failed to delete user: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setTimeout(() => setShowAlert(null), 3000);
+      }
     }
   };
 
@@ -112,11 +128,7 @@ export function AdminUserManagement({ navigate, user, logout, users, setUsers }:
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    return formatDateShort(dateString);
   };
 
   const exportUsers = () => {

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
-import { Card, CardHeader, CardContent, CardFooter } from '../ui/card';
+import { Card, CardHeader, CardContent } from '../ui/card';
 import { Alert, AlertDescription } from '../ui/alert';
 import { Shield, ArrowLeft, Crown, AlertCircle } from 'lucide-react';
 
@@ -13,17 +13,12 @@ interface AdminAuthPageProps {
 }
 
 export function AdminAuthPage({ navigate, login }: AdminAuthPageProps) {
-  const [loginForm, setLoginForm] = useState({ email: 'admin@deepdetect.com', password: 'admin123' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [showError, setShowError] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginForm.email === 'admin@deepdetect.com') {
-      login(loginForm.email, loginForm.password);
-    } else {
-      setShowError(true);
-      setTimeout(() => setShowError(false), 3000);
-    }
+    login(loginForm.email, loginForm.password);
   };
 
   return (
@@ -89,22 +84,6 @@ export function AdminAuthPage({ navigate, login }: AdminAuthPageProps) {
             </form>
           </CardContent>
 
-          <CardFooter>
-            <div className="w-full">
-              <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-                <div className="flex items-start gap-3">
-                  <Shield className="h-5 w-5 text-yellow-600 mt-0.5" />
-                  <div className="text-sm">
-                    <p className="font-medium text-yellow-900 mb-1">Demo Credentials</p>
-                    <p className="text-yellow-700">
-                      Email: admin@deepdetect.com<br />
-                      Password: admin123
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </CardFooter>
         </Card>
       </div>
     </div>

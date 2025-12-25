@@ -305,41 +305,23 @@ export function AdminSystemSettings({ navigate, user, logout }: AdminSystemSetti
               </CardContent>
             </Card>
 
-            {/* AI Model Settings */}
+            {/* AI Model Information */}
             <Card className="border-0 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Zap className="h-5 w-5 text-blue-600" />
-                  AI Model Configuration
+                  AI Model Information
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="modelVersion">Active Model Version</Label>
-                  <Select defaultValue="v2.1">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="v2.1">DeepDetect v2.1 (Current)</SelectItem>
-                      <SelectItem value="v2.0">DeepDetect v2.0 (Legacy)</SelectItem>
-                      <SelectItem value="v1.9">DeepDetect v1.9 (Legacy)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="processingMode">Processing Mode</Label>
-                  <Select defaultValue="balanced">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="fast">Fast (Lower accuracy)</SelectItem>
-                      <SelectItem value="balanced">Balanced (Recommended)</SelectItem>
-                      <SelectItem value="accurate">Accurate (Slower)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Active Model</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Combined ResNet18 v1.0.0
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Combined ResNet18 binary classifier trained on multiple datasets with advanced augmentation techniques
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between">

@@ -1,6 +1,6 @@
+import { useEffect, useState } from 'react';
 import { AdminNavigation } from './AdminNavigation';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
-import { Badge } from '../ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { 
   LineChart, 
@@ -11,21 +11,19 @@ import {
   Tooltip, 
   ResponsiveContainer,
   BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell
+  Bar
 } from 'recharts';
 import { 
-  TrendingUp, 
-  TrendingDown, 
   Calendar, 
   FileText,
   Users,
   Shield,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
+import { api } from '../../services/api';
 import type { DetectionResult, User } from '../../App';
+import { formatDateShort } from '../../utils/dateUtils';
 
 interface AdminAnalyticsProps {
   navigate: (page: string) => void;
@@ -35,41 +33,82 @@ interface AdminAnalyticsProps {
   detectionResults: DetectionResult[];
 }
 
+interface AnalyticsData {
+  daily_scans: Array<{ date: string; scans: number; deepfakes: number }>;
+  confidence_distribution: Array<{ range: string; count: number }>;
+}
+
 export function AdminAnalytics({ navigate, user, logout, users, detectionResults }: AdminAnalyticsProps) {
-  // Mock data for charts
-  const dailyScansData = [
-    { date: 'Jan 10', scans: 12, deepfakes: 2 },
-    { date: 'Jan 11', scans: 19, deepfakes: 4 },
-    { date: 'Jan 12', scans: 8, deepfakes: 1 },
-    { date: 'Jan 13', scans: 15, deepfakes: 3 },
-    { date: 'Jan 14', scans: 22, deepfakes: 5 },
-    { date: 'Jan 15', scans: 18, deepfakes: 2 },
-  ];
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [adminStats, setAdminStats] = useState<{
+    total_analyses: number;
+    deepfakes_detected: number;
+    authentic_detected: number;
+  } | null>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(true);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [timeRange, setTimeRange] = useState('30d');
 
-  const userActivityData = [
-    { name: 'Active Daily', value: 65, color: '#22c55e' },
-    { name: 'Active Weekly', value: 25, color: '#3b82f6' },
-    { name: 'Inactive', value: 10, color: '#94a3b8' },
-  ];
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setIsLoadingAnalytics(true);
+        setAnalyticsError(null);
+        
+        // Pass timeRange to API calls
+        const [analyticsData, statsData] = await Promise.all([
+          api.getAnalytics(timeRange),
+          api.getAdminStats(timeRange),
+        ]);
+        
+        setAnalytics(analyticsData);
+        setAdminStats({
+          total_analyses: statsData.total_analyses,
+          deepfakes_detected: statsData.deepfakes_detected,
+          authentic_detected: statsData.authentic_detected,
+        });
+      } catch (error) {
+        console.error('Failed to fetch analytics:', error);
+        setAnalyticsError(error instanceof Error ? error.message : 'Failed to load analytics');
+      } finally {
+        setIsLoadingAnalytics(false);
+      }
+    };
 
-  const confidenceDistribution = [
-    { range: '90-100%', count: 45 },
-    { range: '80-89%', count: 32 },
-    { range: '70-79%', count: 18 },
-    { range: '60-69%', count: 8 },
-    { range: '<60%', count: 3 },
-  ];
+    fetchData();
+  }, [timeRange]);
+
+  // Format daily scans data for chart
+  const dailyScansData = analytics?.daily_scans.map(item => ({
+    date: formatDateShort(item.date),
+    scans: item.scans,
+    deepfakes: item.deepfakes
+  })) ?? [];
+
+  // Use real confidence distribution from API
+  const confidenceDistribution = analytics?.confidence_distribution ?? [];
 
   const totalUsers = users.filter(u => u.role === 'user').length;
   const activeUsers = users.filter(u => u.status === 'active' && u.role === 'user').length;
-  const totalScans = detectionResults.length;
-  const deepfakesDetected = detectionResults.filter(r => r.result === 'deepfake').length;
+  
+  // Use admin stats if available, otherwise fall back to detectionResults prop
+  const totalScans = adminStats?.total_analyses ?? detectionResults.length;
+  const deepfakesDetected = adminStats?.deepfakes_detected ?? detectionResults.filter(r => r.result === 'deepfake').length;
+  const authenticDetected = adminStats?.authentic_detected ?? detectionResults.filter(r => r.result === 'authentic').length;
+
+  // Prepare data for deepfake vs authentic bar chart
+  const deepfakeVsAuthenticData = [
+    { name: 'Authentic', count: authenticDetected, fill: '#10b981' },
+    { name: 'Deepfake', count: deepfakesDetected, fill: '#ef4444' }
+  ];
+  
   const avgConfidence = totalScans > 0 
-    ? Math.round(detectionResults.reduce((sum, r) => sum + r.confidence, 0) / totalScans)
+    ? (detectionResults.length > 0
+        ? Math.round(detectionResults.reduce((sum, r) => sum + r.confidence, 0) / detectionResults.length)
+        : 0)
     : 0;
 
   const detectionRate = totalScans > 0 ? Math.round((deepfakesDetected / totalScans) * 100) : 0;
-  const userGrowthRate = 12; // Mock growth rate
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -86,7 +125,7 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                   Comprehensive insights into system usage and detection performance.
                 </p>
               </div>
-              <Select defaultValue="7d">
+              <Select value={timeRange} onValueChange={setTimeRange}>
                 <SelectTrigger className="w-48">
                   <Calendar className="h-4 w-4 mr-2" />
                   <SelectValue />
@@ -109,10 +148,6 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                   <div>
                     <p className="text-sm text-muted-foreground">Total Scans</p>
                     <p className="text-2xl font-bold">{totalScans}</p>
-                    <div className="flex items-center gap-1 text-xs mt-1">
-                      <TrendingUp className="h-3 w-3 text-green-600" />
-                      <span className="text-green-600">+28% from last period</span>
-                    </div>
                   </div>
                   <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
                     <FileText className="h-6 w-6 text-blue-600" />
@@ -127,10 +162,6 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                   <div>
                     <p className="text-sm text-muted-foreground">Detection Rate</p>
                     <p className="text-2xl font-bold">{detectionRate}%</p>
-                    <div className="flex items-center gap-1 text-xs mt-1">
-                      <TrendingDown className="h-3 w-3 text-red-600" />
-                      <span className="text-red-600">-2% from last period</span>
-                    </div>
                   </div>
                   <div className="h-12 w-12 bg-red-100 rounded-lg flex items-center justify-center">
                     <AlertTriangle className="h-6 w-6 text-red-600" />
@@ -145,10 +176,6 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                   <div>
                     <p className="text-sm text-muted-foreground">Avg. Confidence</p>
                     <p className="text-2xl font-bold">{avgConfidence}%</p>
-                    <div className="flex items-center gap-1 text-xs mt-1">
-                      <TrendingUp className="h-3 w-3 text-green-600" />
-                      <span className="text-green-600">+3% from last period</span>
-                    </div>
                   </div>
                   <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
                     <Shield className="h-6 w-6 text-green-600" />
@@ -161,12 +188,11 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-muted-foreground">User Growth</p>
-                    <p className="text-2xl font-bold">+{userGrowthRate}%</p>
-                    <div className="flex items-center gap-1 text-xs mt-1">
-                      <TrendingUp className="h-3 w-3 text-green-600" />
-                      <span className="text-green-600">This month</span>
-                    </div>
+                    <p className="text-sm text-muted-foreground">Active Users</p>
+                    <p className="text-2xl font-bold">{activeUsers}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {totalUsers} total users
+                    </p>
                   </div>
                   <div className="h-12 w-12 bg-teal-100 rounded-lg flex items-center justify-center">
                     <Users className="h-6 w-6 text-teal-600" />
@@ -183,70 +209,101 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                 <CardTitle>Daily Scan Activity</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={dailyScansData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="date" />
-                      <YAxis />
-                      <Tooltip />
-                      <Line 
-                        type="monotone" 
-                        dataKey="scans" 
-                        stroke="#3b82f6" 
-                        strokeWidth={2}
-                        name="Total Scans"
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="deepfakes" 
-                        stroke="#ef4444" 
-                        strokeWidth={2}
-                        name="Deepfakes Detected"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                {isLoadingAnalytics ? (
+                  <div className="h-80 flex items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : analyticsError ? (
+                  <div className="h-80 flex items-center justify-center text-red-600">
+                    <div className="text-center">
+                      <AlertTriangle className="h-8 w-8 mx-auto mb-2" />
+                      <p>{analyticsError}</p>
+                    </div>
+                  </div>
+                ) : dailyScansData.length === 0 ? (
+                  <div className="h-80 flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No data available for the selected period</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={dailyScansData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="date" />
+                        <YAxis />
+                        <Tooltip />
+                        <Line 
+                          type="monotone" 
+                          dataKey="scans" 
+                          stroke="#3b82f6" 
+                          strokeWidth={2}
+                          name="Total Scans"
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="deepfakes" 
+                          stroke="#ef4444" 
+                          strokeWidth={2}
+                          name="Deepfakes Detected"
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
-            {/* User Activity Pie Chart */}
+            {/* Deepfake vs Authentic Bar Chart */}
             <Card className="border-0 shadow-lg">
               <CardHeader>
-                <CardTitle>User Activity Distribution</CardTitle>
+                <CardTitle>Deepfake vs Authentic</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={userActivityData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={120}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {userActivityData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="flex justify-center gap-6 mt-4">
-                  {userActivityData.map((entry, index) => (
-                    <div key={index} className="flex items-center gap-2">
-                      <div 
-                        className="w-3 h-3 rounded-full" 
-                        style={{ backgroundColor: entry.color }}
-                      />
-                      <span className="text-sm">{entry.name}: {entry.value}%</span>
+                {isLoadingAnalytics ? (
+                  <div className="h-80 flex items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                ) : analyticsError ? (
+                  <div className="h-80 flex items-center justify-center text-red-600">
+                    <div className="text-center">
+                      <AlertTriangle className="h-8 w-8 mx-auto mb-2" />
+                      <p>{analyticsError}</p>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ) : totalScans === 0 ? (
+                  <div className="h-80 flex items-center justify-center text-muted-foreground">
+                    <div className="text-center">
+                      <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No detection data available</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={deepfakeVsAuthenticData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip 
+                          formatter={(value: number) => [value, 'Count']}
+                          labelFormatter={(label) => `Type: ${label}`}
+                        />
+                        <Bar 
+                          dataKey="count" 
+                          radius={[8, 8, 0, 0]}
+                          fill="#8884d8"
+                        >
+                          {deepfakeVsAuthenticData.map((entry, index) => (
+                            <Bar.Cell key={index} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -257,17 +314,37 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
               <CardTitle>Confidence Score Distribution</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={confidenceDistribution}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="range" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#3b82f6" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {isLoadingAnalytics ? (
+                <div className="h-80 flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : analyticsError ? (
+                <div className="h-80 flex items-center justify-center text-red-600">
+                  <div className="text-center">
+                    <AlertTriangle className="h-8 w-8 mx-auto mb-2" />
+                    <p>{analyticsError}</p>
+                  </div>
+                </div>
+              ) : confidenceDistribution.length === 0 ? (
+                <div className="h-80 flex items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No confidence data available</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={confidenceDistribution}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="range" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#3b82f6" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -281,7 +358,7 @@ export function AdminAnalytics({ navigate, user, logout, users, detectionResults
                 <div className="text-center p-4 bg-green-50 rounded-lg">
                   <Shield className="h-8 w-8 text-green-600 mx-auto mb-2" />
                   <p className="text-2xl font-bold text-green-600">
-                    {detectionResults.filter(r => r.result === 'authentic').length}
+                    {authenticDetected}
                   </p>
                   <p className="text-sm text-green-700">Authentic Content</p>
                 </div>

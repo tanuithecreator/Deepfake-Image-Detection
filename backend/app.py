@@ -95,3 +95,7 @@ if __name__ == '__main__':
     app = create_app()
     # Run on 127.0.0.1:5000 for development
     app.run(debug=True, host='127.0.0.1', port=5000)
+
+# Production configuration for Fly.io
+if os.getenv('FLY_APP_NAME'):
+    app = create_app('production')

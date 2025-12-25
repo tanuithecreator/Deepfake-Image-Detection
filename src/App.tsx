@@ -128,11 +128,11 @@ export default function App() {
         // Fetch data based on user role
         try {
           if (currentUser.role === 'admin') {
-            // Fetch admin data
+            // Fetch admin data - use admin history endpoint to get ALL results
             try {
               const [allUsers, history] = await Promise.all([
                 api.getAllUsers(),
-                api.getDetectionHistory(),
+                api.getAdminHistory(1, 100), // Fetch first 100 results for admin
               ]);
               setUsers(allUsers);
               setDetectionResults(history.results);
@@ -206,12 +206,12 @@ export default function App() {
       // Fetch data based on user role
       try {
         if (authenticatedUser.role === 'admin') {
-          // Fetch admin data
+          // Fetch admin data - use admin history endpoint to get ALL results
           if (!USE_MOCK_API) {
             try {
               const [allUsers, history] = await Promise.all([
                 api.getAllUsers(),
-                api.getDetectionHistory(),
+                api.getAdminHistory(1, 100), // Fetch first 100 results for admin
               ]);
               setUsers(allUsers);
               setDetectionResults(history.results);
@@ -296,6 +296,135 @@ export default function App() {
       setIsAuthenticated(false);
       setDetectionResults([]);
       setSelectedResult(null);
+    }
+  };
+
+  const googleSignIn = async () => {
+    try {
+      setErrorMessage(null);
+      
+      if (USE_MOCK_API && mockApi) {
+        // Mock Google sign-in
+        const response = await mockApi.login('google_user@example.com', 'mock_password');
+        setUser(response.user);
+        setIsAuthenticated(true);
+        setCurrentPage(response.user.role === 'admin' ? 'admin-dashboard' : 'dashboard');
+        return;
+      }
+
+      // Wait for Google Identity Services to load
+      const checkGoogle = () => {
+        return new Promise<void>((resolve, reject) => {
+          if ((window as any).google?.accounts?.id) {
+            resolve();
+            return;
+          }
+          
+          let attempts = 0;
+          const interval = setInterval(() => {
+            attempts++;
+            if ((window as any).google?.accounts?.id) {
+              clearInterval(interval);
+              resolve();
+            } else if (attempts > 50) { // 5 seconds timeout
+              clearInterval(interval);
+              reject(new Error('Google Identity Services failed to load'));
+            }
+          }, 100);
+        });
+      };
+
+      await checkGoogle();
+
+      const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (!googleClientId) {
+        throw new Error('Google OAuth not configured. Please contact support.');
+      }
+
+      // Initialize Google Sign-In
+      (window as any).google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: async (response: { credential: string }) => {
+          try {
+            const idToken = response.credential;
+            const authenticatedUser = await api.googleSignIn(idToken);
+            
+            setUser(authenticatedUser);
+            setIsAuthenticated(true);
+            setCurrentPage(authenticatedUser.role === 'admin' ? 'admin-dashboard' : 'dashboard');
+
+            // Fetch data based on user role
+            try {
+              if (authenticatedUser.role === 'admin') {
+                const [allUsers, history] = await Promise.all([
+                  api.getAllUsers(),
+                  api.getAdminHistory(1, 100), // Fetch first 100 results for admin
+                ]);
+                setUsers(allUsers);
+                setDetectionResults(history.results);
+              } else {
+                const history = await api.getDetectionHistory();
+                setDetectionResults(history.results);
+              }
+            } catch (dataError) {
+              console.warn('Failed to load data after Google sign-in:', dataError);
+              setDetectionResults([]);
+              setSelectedResult(null);
+            }
+          } catch (error) {
+            setErrorMessage(
+              error instanceof Error ? error.message : 'Google sign-in failed. Please try again.',
+            );
+            setUser(null);
+            setIsAuthenticated(false);
+          }
+        },
+      });
+
+      // Try to show One Tap UI first
+      (window as any).google.accounts.id.prompt((notification: any) => {
+        // If One Tap is not shown, create and click a button programmatically
+        if (notification.isNotDisplayed() || notification.isSkippedMoment() || notification.isDismissedMoment()) {
+          // Create a temporary hidden container
+          const tempDiv = document.createElement('div');
+          tempDiv.id = 'temp-google-signin';
+          tempDiv.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;';
+          document.body.appendChild(tempDiv);
+
+          // Render the Google button
+          (window as any).google.accounts.id.renderButton(tempDiv, {
+            theme: 'outline',
+            size: 'large',
+            text: 'signin_with',
+            type: 'standard',
+          });
+
+          // Wait for button to render and click it
+          setTimeout(() => {
+            const button = tempDiv.querySelector('div[role="button"]') as HTMLElement;
+            if (button) {
+              button.click();
+              // Clean up after click
+              setTimeout(() => {
+                if (document.body.contains(tempDiv)) {
+                  document.body.removeChild(tempDiv);
+                }
+              }, 1000);
+            } else {
+              // If button didn't render, clean up and show error
+              if (document.body.contains(tempDiv)) {
+                document.body.removeChild(tempDiv);
+              }
+              setErrorMessage('Unable to initiate Google sign-in. Please check your internet connection and try again.');
+            }
+          }, 300);
+        }
+      });
+      
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Failed to initiate Google sign-in. Please try again.',
+      );
     }
   };
 
@@ -401,6 +530,7 @@ export default function App() {
             navigate={navigate}
             login={login}
             signup={signup}
+            googleSignIn={googleSignIn}
             errorMessage={errorMessage}
             clearError={() => setErrorMessage(null)}
           />
@@ -459,7 +589,10 @@ export default function App() {
             refreshHistory={async () => {
               if (!USE_MOCK_API) {
                 try {
-                  const history = await api.getDetectionHistory();
+                  // Use admin history endpoint if user is admin
+                  const history = user?.role === 'admin' 
+                    ? await api.getAdminHistory(1, 100)
+                    : await api.getDetectionHistory();
                   setDetectionResults(history.results);
                 } catch (error) {
                   console.warn('Failed to refresh history:', error);

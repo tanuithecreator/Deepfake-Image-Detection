@@ -14,9 +14,11 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from PIL import Image
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file, redirect, url_for
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 from werkzeug.utils import secure_filename
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -41,11 +43,11 @@ ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "bmp"}
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv"}
 ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
 MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "model", "is2_efficientnet_b4.pth"
+    os.path.dirname(__file__), "model", "combined_resnet18_best.pth"
 )
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DEFAULT_MODEL_NAME = "EfficientNet-B4-SOTA"
-DEFAULT_MODEL_VERSION = "2.0.0"
+DEFAULT_MODEL_NAME = "Combined ResNet18"
+DEFAULT_MODEL_VERSION = "1.0.0"
 
 # Video processing settings
 FRAMES_PER_SECOND = 1  # Extract 1 frame per second
@@ -54,22 +56,13 @@ MAX_FRAMES = 30  # Maximum frames to process per video
 # Load model at startup
 model = None
 try:
-    # Install timm if not available
-    try:
-        import timm
-    except ImportError:
-        print("[INFO] Installing timm...")
-        os.system("pip install timm")
-        import timm
+    # Import torchvision models for ResNet18
+    import torchvision.models as models
     
-    # Create EfficientNet-B4 model using timm
-    model = timm.create_model(
-        'efficientnet_b4',
-        pretrained=False,  # We're loading our trained weights
-        num_classes=2,
-        drop_rate=0.3,
-        drop_path_rate=0.2
-    )
+    # Create ResNet18 model
+    model = models.resnet18(pretrained=False)  # We're loading our trained weights
+    # Modify the final layer for 2 classes (REAL/FAKE)
+    model.fc = torch.nn.Linear(model.fc.in_features, 2)
 
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
     
@@ -325,21 +318,29 @@ def generate_gradcam(model, image_tensor, target_layer_name=None):
     # Gradients are only computed in train mode
     model.train()
     
-    # Get the target layer (for EfficientNet-B4, use the last conv block)
+    # Get the target layer (for ResNet18, use layer4 - the last conv block)
     target_layer = None
     if target_layer_name is None:
-        # Auto-detect the last convolutional layer for EfficientNet-B4
-        # EfficientNet-B4 structure: blocks.6 (last MBConv block)
+        # Auto-detect the last convolutional layer for ResNet18
+        # ResNet18 structure: layer4 (last residual block)
         for name, module in model.named_modules():
-            if 'blocks.6' in name and isinstance(module, torch.nn.Conv2d):
+            if 'layer4' in name and isinstance(module, torch.nn.Conv2d):
                 target_layer = module
                 target_layer_name = name
-        # Fallback: try to find blocks.6 (the module, not just conv layers)
+        # Fallback: try to find layer4 module itself
         if target_layer is None:
             for name, module in model.named_modules():
-                if name == 'blocks.6':
-                    target_layer = module
-                    target_layer_name = name
+                if name == 'layer4':
+                    # Get the last conv layer within layer4
+                    for subname, submodule in module.named_modules():
+                        if isinstance(submodule, torch.nn.Conv2d):
+                            target_layer = submodule
+                            target_layer_name = f"{name}.{subname}"
+                    if target_layer is None:
+                        # Use the last sequential block in layer4
+                        if hasattr(module, '2'):  # layer4 typically has 2 blocks
+                            target_layer = module[1].conv2  # Last conv in last block
+                            target_layer_name = f"{name}.1.conv2"
                     break
     else:
         # Use specified layer name
@@ -349,13 +350,19 @@ def generate_gradcam(model, image_tensor, target_layer_name=None):
                 break
     
     if target_layer is None:
-        # Last resort: find any conv layer in the last block
-        for name, module in reversed(list(model.named_modules())):
-            if isinstance(module, torch.nn.Conv2d) and 'blocks' in name:
-                target_layer = module
-                target_layer_name = name
+        # Last resort: find the last conv layer in layer4
+        if hasattr(model, 'layer4'):
+            # Get the last conv2d in the last block of layer4
+            last_block = model.layer4[-1]
+            if hasattr(last_block, 'conv2'):
+                target_layer = last_block.conv2
+                target_layer_name = 'layer4.1.conv2'
                 print(f"[INFO] Using auto-detected layer: {target_layer_name}")
-                break
+            else:
+                # Find any conv layer in layer4
+                for name, module in model.layer4.named_modules():
+                    if isinstance(module, torch.nn.Conv2d):
+                        target_layer = module
     
     if target_layer is None:
         raise Exception(f"Target layer not found. Tried: {target_layer_name}")
@@ -485,7 +492,8 @@ def run_inference(image_bytes: bytes, generate_gradcam_heatmap: bool = False) ->
         image_bytes: Image file bytes
         generate_gradcam_heatmap: Whether to generate GRAD-CAM visualization
     Returns: 
-        (prediction_result: str, confidence_score: float, heatmap_base64: str | None, face_detected: bool, face_info: dict)
+        (prediction_result: str, confidence_score: float, heatmap_base64: str | None, 
+         face_detected: bool, face_info: dict)
     """
     if model is None:
         raise Exception("Model not loaded")
@@ -520,27 +528,28 @@ def run_inference(image_bytes: bytes, generate_gradcam_heatmap: bool = False) ->
         if generate_gradcam_heatmap:
             try:
                 # Create a new tensor with gradients enabled for GRAD-CAM
-                # We need to re-run the preprocessing to get a tensor with requires_grad=True
                 face_crop_for_gradcam = face_crop.copy()
                 image_tensor_for_gradcam = transform(face_crop_for_gradcam).unsqueeze(0).to(DEVICE)
                 image_tensor_for_gradcam.requires_grad_(True)
                 
                 print(f"[GRAD-CAM] Starting GRAD-CAM generation for face crop (size: {face_crop.size})")
                 print(f"[GRAD-CAM] Image tensor shape: {image_tensor_for_gradcam.shape}, requires_grad: {image_tensor_for_gradcam.requires_grad}")
-                print(f"[GRAD-CAM] Model training mode: {model.training}")
                 
                 heatmap_image, _ = generate_gradcam(model, image_tensor_for_gradcam)
                 heatmap_base64 = heatmap_to_base64(heatmap_image)
                 print(f"[OK] GRAD-CAM heatmap generated successfully, base64 length: {len(heatmap_base64)}")
-                print(f"[OK] GRAD-CAM base64 starts with: {heatmap_base64[:50]}...")
             except Exception as e:
                 import traceback
                 print(f"[ERROR] GRAD-CAM generation failed: {e}")
                 print(f"[ERROR] Traceback: {traceback.format_exc()}")
                 heatmap_base64 = None
-
+        
+        print(f"[INFERENCE] Returning: result={result}, confidence={confidence_score:.4f}, has_heatmap={heatmap_base64 is not None}")
         return result, confidence_score, heatmap_base64, face_detected, face_info
     except Exception as e:
+        print(f"[ERROR] Inference failed: {str(e)}")
+        import traceback
+        print(f"[ERROR] Traceback: {traceback.format_exc()}")
         raise Exception(f"Inference failed: {str(e)}")
 
 def process_video(video_bytes: bytes, generate_gradcam: bool = False) -> dict:
@@ -697,7 +706,7 @@ def get_or_create_detection_model():
         model_record = DetectionModel(
             name=DEFAULT_MODEL_NAME,
             version=DEFAULT_MODEL_VERSION,
-            de scription="EfficientNet-B4 state-of-the-art binary classifier for real vs fake detection. Trained on 140k Real and Fake Faces dataset with advanced augmentation and focal loss.",
+            description="Combined ResNet18 binary classifier for real vs fake detection. Trained on multiple datasets with advanced augmentation techniques.",
             accuracy=None,
             weights_path=MODEL_PATH,
             is_active=True,
@@ -713,8 +722,8 @@ def get_or_create_detection_model():
         if model_record.weights_path != MODEL_PATH:
             model_record.weights_path = MODEL_PATH
             print(f"[INFO] Updated model weights path")
-        if model_record.description != "EfficientNet-B4 state-of-the-art binary classifier for real vs fake detection. Trained on 140k Real and Fake Faces dataset with advanced augmentation and focal loss.":
-            model_record.description = "EfficientNet-B4 state-of-the-art binary classifier for real vs fake detection. Trained on 140k Real and Fake Faces dataset with advanced augmentation and focal loss."
+        if model_record.description != "Combined ResNet18 binary classifier for real vs fake detection. Trained on multiple datasets with advanced augmentation techniques.":
+            model_record.description = "Combined ResNet18 binary classifier for real vs fake detection. Trained on multiple datasets with advanced augmentation techniques."
     
     return model_record
 
@@ -903,6 +912,160 @@ def login():
     }), 200
 
 # ============================================================================
+# Google OAuth Authentication
+# ============================================================================
+
+@api_bp.route("/auth/google", methods=["POST"])
+def google_auth():
+    """Initiate Google OAuth flow - returns authorization URL."""
+    try:
+        google_client_id = os.getenv('GOOGLE_CLIENT_ID')
+        if not google_client_id:
+            return jsonify({"error": "Google OAuth not configured"}), 500
+        
+        # Get redirect URI from request or use default
+        redirect_uri = request.json.get('redirect_uri') if request.json else None
+        if not redirect_uri:
+            # Default to frontend URL
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+            redirect_uri = f"{frontend_url}/auth/google/callback"
+        
+        # Google OAuth authorization URL
+        from urllib.parse import urlencode
+        params = {
+            'client_id': google_client_id,
+            'redirect_uri': redirect_uri,
+            'response_type': 'code',
+            'scope': 'openid email profile',
+            'access_type': 'online',
+            'prompt': 'select_account',
+        }
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+        
+        return jsonify({
+            "auth_url": auth_url,
+            "redirect_uri": redirect_uri,
+        }), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to initiate Google OAuth: {str(e)}"}), 500
+
+@api_bp.route("/auth/google/callback", methods=["POST"])
+def google_callback():
+    """Handle Google OAuth callback - verify token and create/login user."""
+    try:
+        data = request.get_json()
+        if not data or 'id_token' not in data:
+            return jsonify({"error": "Missing id_token"}), 400
+        
+        id_token_str = data.get('id_token')
+        google_client_id = os.getenv('GOOGLE_CLIENT_ID')
+        
+        if not google_client_id:
+            return jsonify({"error": "Google OAuth not configured"}), 500
+        
+        # Verify the Google ID token
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                id_token_str,
+                google_requests.Request(),
+                google_client_id
+            )
+            
+            # Verify the issuer
+            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+                raise ValueError('Wrong issuer.')
+            
+            # Extract user information
+            google_id = idinfo['sub']
+            email = idinfo.get('email')
+            name = idinfo.get('name', '')
+            picture = idinfo.get('picture')
+            
+            if not email:
+                return jsonify({"error": "Email not provided by Google"}), 400
+            
+            # Generate username from email or name
+            username_base = email.split('@')[0] if email else name.lower().replace(' ', '_')
+            username = username_base
+            
+            # Ensure username is unique
+            counter = 1
+            while User.query.filter_by(username=username).first():
+                username = f"{username_base}_{counter}"
+                counter += 1
+            
+            # Check if user exists by Google ID
+            user = User.query.filter_by(google_id=google_id).first()
+            
+            if not user:
+                # Check if user exists by email (might have registered with email/password)
+                existing_user = User.query.filter_by(email=email).first()
+                if existing_user:
+                    # Link Google account to existing user
+                    existing_user.google_id = google_id
+                    if not existing_user.password_hash:
+                        # If no password, update username if needed
+                        pass
+                    user = existing_user
+                else:
+                    # Create new user
+                    user = User(
+                        username=username,
+                        email=email,
+                        google_id=google_id,
+                        password_hash=None,  # OAuth users don't have passwords
+                        status='active',
+                    )
+                    db.session.add(user)
+            else:
+                # Update last login info
+                user.last_login_at = datetime.utcnow()
+                user.last_login_ip = request.remote_addr
+                user.failed_login_attempts = 0
+            
+            db.session.commit()
+            
+            # Generate JWT token
+            access_token = create_access_token(identity=str(user.id))
+            
+            # Log the action
+            log_action(
+                user_id=user.id,
+                action_type="auth.google_login",
+                status_code=200,
+                details={"email": email, "google_id": google_id},
+            )
+            db.session.commit()
+            
+            return jsonify({
+                "message": "Google authentication successful",
+                "access_token": access_token,
+                "user": user.to_dict(),
+            }), 200
+            
+        except ValueError as e:
+            # Invalid token
+            log_action(
+                user_id=None,
+                action_type="auth.google_login",
+                status_code=401,
+                details={"error": str(e)},
+            )
+            db.session.commit()
+            return jsonify({"error": f"Invalid Google token: {str(e)}"}), 401
+            
+    except Exception as e:
+        db.session.rollback()
+        log_action(
+            user_id=None,
+            action_type="auth.google_login",
+            status_code=500,
+            details={"error": str(e)},
+        )
+        db.session.commit()
+        return jsonify({"error": f"Google authentication failed: {str(e)}"}), 500
+
+# ============================================================================
 # Protected User Endpoints
 # ============================================================================
 
@@ -985,6 +1148,9 @@ def predict():
         file_size = len(file_bytes)
         filename = secure_filename(file.filename)
         is_video = is_video_file(filename)
+        
+        # Initialize variables for response
+        representative_heatmap = None
 
         # Process based on file type
         if is_video:
@@ -1013,7 +1179,6 @@ def predict():
             }
             
             # Get representative heatmap (prefer fake frames, then any frame with heatmap)
-            representative_heatmap = None
             # First try to get heatmap from a fake frame (most informative)
             for fr in video_results["frame_results"]:
                 if fr.get("prediction") == "FAKE" and fr.get("heatmap"):
@@ -1037,6 +1202,7 @@ def predict():
                 file_bytes, generate_gradcam
             )
             representative_heatmap = heatmap_base64
+            print(f"[PREDICT] Image processed: result={prediction_result}, confidence={confidence_score:.4f}, has_heatmap={representative_heatmap is not None}")
             frame_metadata = {
                 "face_detected": face_detected,
                 "face_confidence": round(float(face_info.get('confidence', 0.0)), 3) if face_detected else None
@@ -1147,6 +1313,294 @@ def predict():
         db.session.commit()
         return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
 
+@api_bp.route("/predict-url", methods=["POST"])
+@jwt_required()
+def predict_from_url():
+    """
+    Analyze image from URL and run deepfake detection.
+    - Requires JWT authentication
+    - Accepts image URL (images only, max 16MB)
+    - Downloads image, runs PyTorch model inference
+    - Saves results to database
+    - Returns prediction results
+    """
+    try:
+        user_id_str = get_jwt_identity()
+        user_id = int(user_id_str) if user_id_str else None
+    except Exception as e:
+        print(f"JWT Error in /predict-url: {e}")
+        return jsonify({'error': f'Invalid or missing authentication token: {str(e)}'}), 401
+    
+    if not user_id:
+        return jsonify({'error': 'User ID not found in token'}), 401
+    
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    data = request.get_json()
+    if not data or 'url' not in data:
+        return jsonify({"error": "No URL provided"}), 400
+    
+    image_url = data.get('url', '').strip()
+    if not image_url:
+        return jsonify({"error": "Image address cannot be empty"}), 400
+    
+    # Check if it's a base64 data URL
+    is_base64 = image_url.startswith('data:image/')
+    
+    if is_base64:
+        # Handle base64 data URL
+        import base64
+        import re
+        
+        print(f"[BASE64] Detected base64 data URL, length: {len(image_url)}")
+        
+        # Validate base64 format - use more flexible regex to handle long strings
+        base64_match = re.match(r'^data:image/(\w+);base64,(.+)$', image_url, re.DOTALL)
+        if not base64_match:
+            print(f"[BASE64] Regex match failed. First 100 chars: {image_url[:100]}")
+            return jsonify({"error": "Invalid base64 image format. Expected: data:image/[type];base64,[data]"}), 400
+        
+        print(f"[BASE64] Regex match successful, image type: {base64_match.group(1)}")
+        
+        image_type = base64_match.group(1).lower()
+        allowed_types = ['jpeg', 'jpg', 'png', 'gif', 'webp', 'bmp']
+        if image_type not in allowed_types:
+            return jsonify({"error": f"Unsupported image type: {image_type}. Allowed: {', '.join(allowed_types)}"}), 400
+        
+        # Extract and clean base64 data (remove whitespace/newlines)
+        base64_data = base64_match.group(2).strip().replace('\n', '').replace('\r', '').replace(' ', '')
+        print(f"[BASE64] Extracted base64 data length: {len(base64_data)}")
+        
+        # Check size (approximate - base64 is ~33% larger than binary)
+        size_in_bytes = (len(base64_data) * 3) // 4
+        if size_in_bytes > 16 * 1024 * 1024:
+            return jsonify({"error": "Image too large (max 16MB)"}), 400
+        
+        try:
+            # Decode base64 to bytes - handle padding issues
+            # Add padding if needed (base64 strings should be multiple of 4)
+            missing_padding = len(base64_data) % 4
+            if missing_padding:
+                base64_data += '=' * (4 - missing_padding)
+                print(f"[BASE64] Added {4 - missing_padding} padding characters")
+            
+            file_bytes = base64.b64decode(base64_data, validate=True)
+            file_size = len(file_bytes)
+            print(f"[BASE64] Successfully decoded to {file_size} bytes")
+            
+            # Determine filename from image type
+            ext_map = {
+                'jpeg': '.jpg',
+                'jpg': '.jpg',
+                'png': '.png',
+                'gif': '.gif',
+                'webp': '.webp',
+                'bmp': '.bmp'
+            }
+            ext = ext_map.get(image_type, '.jpg')
+            filename = f'image_from_base64{ext}'
+            filename = secure_filename(filename)
+            
+            # Validate file type
+            if not allowed_file(filename):
+                allowed = ", ".join(ALLOWED_IMAGE_EXTENSIONS)
+                return jsonify({"error": f"Invalid image type. Allowed: {allowed}"}), 400
+            
+            # Skip download step, go directly to processing
+            skip_download = True
+            
+        except Exception as e:
+            return jsonify({"error": f"Failed to decode base64 image: {str(e)}"}), 400
+    else:
+        # Handle regular HTTP/HTTPS URL
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(image_url)
+            if not parsed.scheme or not parsed.netloc:
+                return jsonify({"error": "Invalid URL format"}), 400
+            if parsed.scheme not in ['http', 'https']:
+                return jsonify({"error": "Only HTTP, HTTPS URLs, or base64 data URLs are supported"}), 400
+        except Exception as e:
+            return jsonify({"error": f"Invalid URL: {str(e)}"}), 400
+        
+        skip_download = False
+    
+    # Check if GRAD-CAM should be generated (default: True)
+    generate_gradcam = data.get('generate_gradcam', True)
+    
+    try:
+        import time
+        start_time = time.time()
+        
+        if not skip_download:
+            # Download image from HTTP/HTTPS URL
+            import requests
+            from urllib.parse import urlparse
+            
+            print(f"[URL] Downloading image from: {image_url}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(image_url, headers=headers, timeout=30, stream=True)
+            response.raise_for_status()
+            
+            # Check content type
+            content_type = response.headers.get('Content-Type', '').lower()
+            if not content_type.startswith('image/'):
+                return jsonify({"error": f"URL does not point to an image. Content-Type: {content_type}"}), 400
+            
+            # Check file size (max 16MB)
+            content_length = response.headers.get('Content-Length')
+            if content_length and int(content_length) > 16 * 1024 * 1024:
+                return jsonify({"error": "Image file too large (max 16MB)"}), 400
+            
+            # Read image bytes
+            file_bytes = response.content
+            file_size = len(file_bytes)
+            
+            if file_size > 16 * 1024 * 1024:
+                return jsonify({"error": "Image file too large (max 16MB)"}), 400
+            
+            # Determine filename from URL
+            parsed_url = urlparse(image_url)
+            filename = os.path.basename(parsed_url.path) or 'image_from_url.jpg'
+            if not filename or '.' not in filename:
+                # Try to determine extension from content type
+                ext_map = {
+                    'image/jpeg': '.jpg',
+                    'image/jpg': '.jpg',
+                    'image/png': '.png',
+                    'image/gif': '.gif',
+                    'image/webp': '.webp',
+                    'image/bmp': '.bmp'
+                }
+                ext = ext_map.get(content_type.split(';')[0], '.jpg')
+                filename = f'image_from_url{ext}'
+            
+            filename = secure_filename(filename)
+            
+            # Validate file type
+            if not allowed_file(filename):
+                allowed = ", ".join(ALLOWED_IMAGE_EXTENSIONS)
+                return jsonify({"error": f"Invalid image type. Allowed: {allowed}"}), 400
+        else:
+            # Base64 data URL - file_bytes and filename already set above
+            print(f"[BASE64] Processing base64 image (type: {image_type}, size: {file_size} bytes)")
+        
+        # Process image (same as file upload)
+        prediction_result, confidence_score, heatmap_base64, face_detected, face_info = run_inference(
+            file_bytes, generate_gradcam
+        )
+        
+        processing_time_ms = int((time.time() - start_time) * 1000)
+        
+        # Generate checksum
+        file_checksum = hashlib.sha256(file_bytes).hexdigest()
+        
+        # Check if media file already exists (by checksum)
+        existing_media = MediaFile.query.filter_by(checksum=file_checksum, user_id=user_id).first()
+        
+        if existing_media:
+            media_file = existing_media
+            media_file.last_analyzed_at = datetime.utcnow()
+        else:
+            # Store file
+            stored_filename = f"{uuid4().hex}_{filename}"
+            storage_dir = os.path.join(os.path.dirname(__file__), "uploads", str(user_id))
+            os.makedirs(storage_dir, exist_ok=True)
+            storage_path = os.path.join(storage_dir, stored_filename)
+            
+            with open(storage_path, "wb") as f:
+                f.write(file_bytes)
+            
+            media_file = MediaFile(
+                user_id=user_id,
+                original_filename=filename,
+                stored_filename=stored_filename,
+                storage_path=storage_path,
+                file_type="image",
+                file_size=file_size,
+                checksum=file_checksum,
+                uploaded_at=datetime.utcnow(),
+                last_analyzed_at=datetime.utcnow(),
+            )
+            db.session.add(media_file)
+        
+        db.session.flush()
+        
+        # Get or create detection model
+        detection_model = get_or_create_detection_model()
+        
+        # Create analysis result
+        analysis_metadata = {
+            "source": "base64" if is_base64 else "url",
+            "source_url": image_url if not is_base64 else "base64_data_url",
+            "face_detected": face_detected,
+            "face_confidence": face_info.get('confidence'),
+        }
+        
+        analysis = AnalysisResult(
+            user_id=user_id,
+            media_file_id=media_file.id,
+            model_id=detection_model.id if detection_model else None,
+            prediction_label=prediction_result,
+            confidence_score=confidence_score,
+            processing_time_ms=processing_time_ms,
+            analysis_metadata=analysis_metadata,
+            created_at=datetime.utcnow(),
+        )
+        db.session.add(analysis)
+        
+        log_action(
+            user_id=user_id,
+            action_type="analysis.predict_url",
+            status_code=200,
+            details={
+                "media_file_id": media_file.id,
+                "analysis_id": analysis.id,
+                "prediction_label": prediction_result,
+                "source_url": image_url,
+            },
+        )
+        
+        db.session.commit()
+        
+        # Prepare response
+        analysis_dict = analysis.to_dict()
+        model_meta = detection_model.to_dict() if detection_model else None
+        analysis_dict["model"] = model_meta
+        
+        response_data = {
+            "message": "Prediction completed successfully",
+            "media_file": media_file.to_dict(),
+            "analysis": analysis_dict,
+        }
+        
+        if heatmap_base64:
+            response_data["gradcam_heatmap"] = heatmap_base64
+        
+        # Always include text explanation if available
+        return jsonify(response_data), 200
+        
+    except requests.exceptions.RequestException as e:
+        db.session.rollback()
+        error_msg = f"Failed to download image from URL: {str(e)}"
+        print(f"[ERROR] {error_msg}")
+        return jsonify({"error": error_msg}), 400
+    except Exception as e:
+        db.session.rollback()
+        log_action(
+            user_id=user_id,
+            action_type="analysis.predict_url",
+            status_code=500,
+            details={"error": str(e), "url": image_url},
+        )
+        db.session.commit()
+        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
+
 # ============================================================================
 # History Endpoint - Paginated User Predictions
 # ============================================================================
@@ -1200,6 +1654,54 @@ def get_history():
         "per_page": per_page,
         "results": results,
     }), 200
+
+@api_bp.route("/admin/history", methods=["GET"])
+@jwt_required()
+def get_admin_history():
+    """Get all detection results for admin (admin only)."""
+    admin_user, error_response, status_code = require_admin()
+    if error_response:
+        return error_response, status_code
+    
+    try:
+        # Get pagination parameters from query string
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 100, type=int)  # Default to 100 for admin
+        
+        # Ensure valid pagination values
+        page = max(1, page)
+        per_page = min(1000, max(1, per_page))  # Allow up to 1000 per page for admin
+        
+        # Get all analysis results (no user filter for admin)
+        query = AnalysisResult.query.order_by(AnalysisResult.created_at.desc())
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        results = []
+        for result in pagination.items:
+            media = result.media_file
+            model_meta = result.model.to_dict() if result.model else None
+            data = result.to_dict()
+            data["media_file"] = media.to_dict() if media else None
+            data["model"] = model_meta
+            results.append(data)
+        
+        log_action(
+            user_id=admin_user.id,
+            action_type="admin.view_all_history",
+            status_code=200,
+            details={"page": page, "per_page": per_page, "total": pagination.total},
+        )
+        db.session.commit()
+        
+        return jsonify({
+            "total": pagination.total,
+            "pages": pagination.pages,
+            "current_page": page,
+            "per_page": per_page,
+            "results": results,
+        }), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch admin history: {str(e)}"}), 500
 
 # ============================================================================
 # Admin Management Endpoints
@@ -1399,14 +1901,21 @@ def require_admin():
 @api_bp.route("/admin/users", methods=["GET"])
 @jwt_required()
 def get_all_users():
-    """Get all users (admin only)."""
+    """Get all users with their statistics (admin only)."""
     admin_user, error_response, status_code = require_admin()
     if error_response:
         return error_response, status_code
     
     try:
         users = User.query.order_by(User.created_at.desc()).all()
-        users_data = [user.to_dict() for user in users]
+        users_data = []
+        
+        for user in users:
+            user_dict = user.to_dict()
+            # Calculate total scans (analyses) for this user
+            total_scans = AnalysisResult.query.filter_by(user_id=user.id).count()
+            user_dict["total_scans"] = total_scans
+            users_data.append(user_dict)
         
         log_action(
             user_id=admin_user.id,
@@ -1429,26 +1938,59 @@ def get_admin_stats():
         return error_response, status_code
     
     try:
+        # Get time range parameter (default: 30d)
+        time_range = request.args.get('time_range', '30d')
+        
+        # Calculate date threshold based on time range
+        from datetime import timedelta
+        days_map = {
+            '24h': 1,
+            '7d': 7,
+            '30d': 30,
+            '90d': 90,
+        }
+        days = days_map.get(time_range, 30)
+        date_threshold = datetime.utcnow() - timedelta(days=days)
+        
         total_users = User.query.count()
         admin_count = User.query.filter_by(is_admin=True).count()
         regular_users = total_users - admin_count
         
+        # Get total media files (all time)
         total_media = MediaFile.query.count()
-        total_analyses = AnalysisResult.query.count()
-        fake_count = AnalysisResult.query.filter_by(prediction_label='FAKE').count()
-        real_count = AnalysisResult.query.filter_by(prediction_label='REAL').count()
+        # Get total analyses (all time) for overall stats
+        total_analyses_all_time = AnalysisResult.query.count()
+        # Get filtered analyses by time range for trends
+        total_analyses = AnalysisResult.query.filter(
+            AnalysisResult.created_at >= date_threshold
+        ).count()
+        fake_count = AnalysisResult.query.filter(
+            AnalysisResult.created_at >= date_threshold,
+            AnalysisResult.prediction_label == 'FAKE'
+        ).count()
+        real_count = AnalysisResult.query.filter(
+            AnalysisResult.created_at >= date_threshold,
+            AnalysisResult.prediction_label == 'REAL'
+        ).count()
+        # Get all-time counts for overall stats
+        fake_count_all_time = AnalysisResult.query.filter(
+            AnalysisResult.prediction_label == 'FAKE'
+        ).count()
+        real_count_all_time = AnalysisResult.query.filter(
+            AnalysisResult.prediction_label == 'REAL'
+        ).count()
         
-        # Active users (logged in within last 30 days)
-        from datetime import timedelta
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        active_users = User.query.filter(User.last_login_at >= thirty_days_ago).count()
+        # Active users (logged in within the time range)
+        active_users = User.query.filter(User.last_login_at >= date_threshold).count()
         
-        # Average confidence
-        avg_confidence_result = db.session.query(func.avg(AnalysisResult.confidence_score)).scalar()
+        # Average confidence (all time for overall stats)
+        avg_confidence_result = db.session.query(
+            func.avg(AnalysisResult.confidence_score)
+        ).scalar()
         avg_confidence = round(float(avg_confidence_result * 100), 2) if avg_confidence_result else 0
         
-        # Detection rate
-        detection_rate = round((fake_count / total_analyses * 100), 2) if total_analyses > 0 else 0
+        # Detection rate (all time)
+        detection_rate = round((fake_count_all_time / total_analyses_all_time * 100), 2) if total_analyses_all_time > 0 else 0
         
         stats = {
             "total_users": total_users,
@@ -1456,9 +1998,9 @@ def get_admin_stats():
             "admin_users": admin_count,
             "active_users": active_users,
             "total_media_files": total_media,
-            "total_analyses": total_analyses,
-            "deepfakes_detected": fake_count,
-            "authentic_detected": real_count,
+            "total_analyses": total_analyses_all_time,  # Use all-time count for overall stats
+            "deepfakes_detected": fake_count_all_time,  # Use all-time count
+            "authentic_detected": real_count_all_time,  # Use all-time count
             "detection_rate": detection_rate,
             "avg_confidence": avg_confidence,
         }
@@ -1467,6 +2009,7 @@ def get_admin_stats():
             user_id=admin_user.id,
             action_type="admin.view_stats",
             status_code=200,
+            details={"time_range": time_range},
         )
         db.session.commit()
         
@@ -1483,9 +2026,19 @@ def get_analytics():
         return error_response, status_code
     
     try:
-        # Daily scans for last 30 days
+        # Get time range parameter (default: 30d)
+        time_range = request.args.get('time_range', '30d')
+        
+        # Calculate date threshold based on time range
         from datetime import timedelta
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        days_map = {
+            '24h': 1,
+            '7d': 7,
+            '30d': 30,
+            '90d': 90,
+        }
+        days = days_map.get(time_range, 30)
+        date_threshold = datetime.utcnow() - timedelta(days=days)
         
         # Check if using SQLite (date function works differently)
         from flask import current_app
@@ -1501,7 +2054,7 @@ def get_analytics():
                     case((AnalysisResult.prediction_label == 'FAKE', 1), else_=0)
                 ).label('deepfakes')
             ).filter(
-                AnalysisResult.created_at >= thirty_days_ago
+                AnalysisResult.created_at >= date_threshold
             ).group_by(
                 func.strftime('%Y-%m-%d', AnalysisResult.created_at)
             ).order_by(
@@ -1522,7 +2075,7 @@ def get_analytics():
                     case((AnalysisResult.prediction_label == 'FAKE', 1), else_=0)
                 ).label('deepfakes')
             ).filter(
-                AnalysisResult.created_at >= thirty_days_ago
+                AnalysisResult.created_at >= date_threshold
             ).group_by(
                 func.date(AnalysisResult.created_at)
             ).order_by(
@@ -1535,7 +2088,7 @@ def get_analytics():
                 'deepfakes': row.deepfakes or 0
             } for row in daily_scans]
         
-        # Confidence distribution
+        # Confidence distribution (within time range)
         confidence_ranges = [
             (90, 100, '90-100%'),
             (80, 89, '80-89%'),
@@ -1552,12 +2105,14 @@ def get_analytics():
             
             if max_conf < 100:
                 count = db.session.query(AnalysisResult).filter(
+                    AnalysisResult.created_at >= date_threshold,
                     AnalysisResult.confidence_score >= min_decimal,
                     AnalysisResult.confidence_score <= max_decimal
                 ).count()
             else:
                 # For <60%, we want scores less than 0.60
                 count = db.session.query(AnalysisResult).filter(
+                    AnalysisResult.created_at >= date_threshold,
                     AnalysisResult.confidence_score < 0.60
                 ).count()
             
@@ -1572,6 +2127,7 @@ def get_analytics():
             user_id=admin_user.id,
             action_type="admin.view_analytics",
             status_code=200,
+            details={"time_range": time_range},
         )
         db.session.commit()
         

@@ -25,6 +25,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import type { DetectionResult, User } from '../App';
+import { formatDateShort } from '../utils/dateUtils';
 
 interface HistoryPageProps {
   navigate: (page: string) => void;
@@ -108,11 +109,7 @@ export function HistoryPage({
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    return formatDateShort(dateString);
   };
 
   const exportHistory = () => {

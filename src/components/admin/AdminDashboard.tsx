@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { AdminNavigation } from './AdminNavigation';
 import { Button } from '../ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
@@ -12,9 +13,13 @@ import {
   Activity,
   Server,
   Clock,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
+import { api } from '../../services/api';
 import type { DetectionResult, User } from '../../App';
+import { generateComprehensiveReport } from '../../utils/reportGenerator';
+import { formatDateTimeEAT } from '../../utils/dateUtils';
 
 interface AdminDashboardProps {
   navigate: (page: string) => void;
@@ -24,14 +29,50 @@ interface AdminDashboardProps {
   detectionResults: DetectionResult[];
 }
 
+interface AdminStats {
+  total_users: number;
+  regular_users: number;
+  admin_users: number;
+  active_users: number;
+  total_media_files: number;
+  total_analyses: number;
+  deepfakes_detected: number;
+  authentic_detected: number;
+  detection_rate: number;
+  avg_confidence: number;
+}
+
 export function AdminDashboard({ navigate, user, logout, users, detectionResults }: AdminDashboardProps) {
-  const totalUsers = users.filter(u => u.role === 'user').length;
-  const activeUsers = users.filter(u => u.status === 'active' && u.role === 'user').length;
-  const totalScans = detectionResults.length;
-  const deepfakesDetected = detectionResults.filter(r => r.result === 'deepfake').length;
-  const avgConfidence = totalScans > 0 
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        setIsLoadingStats(true);
+        setStatsError(null);
+        const statsData = await api.getAdminStats();
+        setStats(statsData);
+      } catch (error) {
+        console.error('Failed to fetch admin stats:', error);
+        setStatsError(error instanceof Error ? error.message : 'Failed to load statistics');
+      } finally {
+        setIsLoadingStats(false);
+      }
+    };
+
+    fetchStats();
+  }, []);
+
+  // Use real stats if available, otherwise fall back to computed values
+  const totalUsers = stats?.regular_users ?? users.filter(u => u.role === 'user').length;
+  const activeUsers = stats?.active_users ?? users.filter(u => u.status === 'active' && u.role === 'user').length;
+  const totalScans = stats?.total_analyses ?? detectionResults.length;
+  const deepfakesDetected = stats?.deepfakes_detected ?? detectionResults.filter(r => r.result === 'deepfake').length;
+  const avgConfidence = stats?.avg_confidence ?? (totalScans > 0 
     ? Math.round(detectionResults.reduce((sum, r) => sum + r.confidence, 0) / totalScans)
-    : 0;
+    : 0);
 
   const recentActivity = detectionResults.slice(0, 10).map(result => ({
     ...result,
@@ -53,12 +94,42 @@ export function AdminDashboard({ navigate, user, logout, users, detectionResults
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatDateTimeEAT(dateString, {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const handleGenerateReport = async () => {
+    try {
+      // Fetch all required data for the report
+      const [statsData, allUsers, allDetectionResults] = await Promise.all([
+        stats ? Promise.resolve(stats) : api.getAdminStats(),
+        users.length > 0 ? Promise.resolve(users) : api.getAllUsers(),
+        detectionResults.length > 0 ? Promise.resolve(detectionResults) : (async () => {
+          // Fetch all detection results for admin (may need multiple pages)
+          let allResults: DetectionResult[] = [];
+          let page = 1;
+          let hasMore = true;
+          
+          while (hasMore && page <= 10) { // Limit to 10 pages (1000 results max)
+            const history = await api.getAdminHistory(page, 100);
+            allResults = [...allResults, ...history.results];
+            hasMore = history.results.length === 100 && page * 100 < history.total;
+            page++;
+          }
+          
+          return allResults;
+        })()
+      ]);
+      
+      await generateComprehensiveReport(statsData, allUsers, allDetectionResults);
+    } catch (error) {
+      console.error('Failed to generate report:', error);
+      alert('Failed to generate report. Please try again.');
+    }
   };
 
   return (
@@ -76,67 +147,98 @@ export function AdminDashboard({ navigate, user, logout, users, detectionResults
           </div>
 
           {/* System Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <Card className="border-0 shadow-sm">
+          {isLoadingStats ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+              {[1, 2, 3, 4].map((i) => (
+                <Card key={i} className="border-0 shadow-sm">
+                  <CardContent className="p-6">
+                    <div className="flex items-center justify-center h-24">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : statsError ? (
+            <Card className="border-0 shadow-sm mb-8 border-red-200 bg-red-50">
               <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Total Users</p>
-                    <p className="text-2xl font-bold">{totalUsers}</p>
-                    <p className="text-xs text-green-600 mt-1">↑ +12% this month</p>
-                  </div>
-                  <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                    <Users className="h-6 w-6 text-blue-600" />
-                  </div>
+                <div className="flex items-center gap-2 text-red-700">
+                  <AlertTriangle className="h-5 w-5" />
+                  <p>Error loading statistics: {statsError}</p>
                 </div>
               </CardContent>
             </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+              <Card className="border-0 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Total Users</p>
+                      <p className="text-2xl font-bold">{totalUsers}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {stats?.admin_users ?? 0} admin{stats?.admin_users !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                    <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                      <Users className="h-6 w-6 text-blue-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-            <Card className="border-0 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Active Users</p>
-                    <p className="text-2xl font-bold text-green-600">{activeUsers}</p>
-                    <p className="text-xs text-green-600 mt-1">↑ +5% this week</p>
+              <Card className="border-0 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Active Users</p>
+                      <p className="text-2xl font-bold text-green-600">{activeUsers}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Last 30 days
+                      </p>
+                    </div>
+                    <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
+                      <Activity className="h-6 w-6 text-green-600" />
+                    </div>
                   </div>
-                  <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
-                    <Activity className="h-6 w-6 text-green-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
 
-            <Card className="border-0 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Total Scans</p>
-                    <p className="text-2xl font-bold">{totalScans}</p>
-                    <p className="text-xs text-blue-600 mt-1">↑ +28% this week</p>
+              <Card className="border-0 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Total Scans</p>
+                      <p className="text-2xl font-bold">{totalScans}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {stats?.total_media_files ?? 0} files uploaded
+                      </p>
+                    </div>
+                    <div className="h-12 w-12 bg-teal-100 rounded-lg flex items-center justify-center">
+                      <FileText className="h-6 w-6 text-teal-600" />
+                    </div>
                   </div>
-                  <div className="h-12 w-12 bg-teal-100 rounded-lg flex items-center justify-center">
-                    <FileText className="h-6 w-6 text-teal-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
 
-            <Card className="border-0 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Deepfakes Found</p>
-                    <p className="text-2xl font-bold text-red-600">{deepfakesDetected}</p>
-                    <p className="text-xs text-yellow-600 mt-1">↑ +3 this week</p>
+              <Card className="border-0 shadow-sm">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Deepfakes Found</p>
+                      <p className="text-2xl font-bold text-red-600">{deepfakesDetected}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {stats?.detection_rate ? `${stats.detection_rate}% detection rate` : ''}
+                      </p>
+                    </div>
+                    <div className="h-12 w-12 bg-red-100 rounded-lg flex items-center justify-center">
+                      <AlertTriangle className="h-6 w-6 text-red-600" />
+                    </div>
                   </div>
-                  <div className="h-12 w-12 bg-red-100 rounded-lg flex items-center justify-center">
-                    <AlertTriangle className="h-6 w-6 text-red-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* System Health */}
@@ -150,33 +252,45 @@ export function AdminDashboard({ navigate, user, logout, users, detectionResults
               <CardContent className="space-y-4">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm">CPU Usage</span>
-                    <span className="text-sm font-medium">42%</span>
+                    <span className="text-sm">Detection Accuracy</span>
+                    <span className="text-sm font-medium">{avgConfidence}%</span>
                   </div>
-                  <Progress value={42} className="h-2" />
+                  <Progress value={avgConfidence} className="h-2" />
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm">Memory Usage</span>
-                    <span className="text-sm font-medium">67%</span>
+                    <span className="text-sm">Detection Rate</span>
+                    <span className="text-sm font-medium">
+                      {stats?.detection_rate ? `${stats.detection_rate}%` : 'N/A'}
+                    </span>
                   </div>
-                  <Progress value={67} className="h-2 [&>div]:bg-yellow-500" />
+                  <Progress 
+                    value={stats?.detection_rate ?? 0} 
+                    className="h-2 [&>div]:bg-yellow-500" 
+                  />
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm">Storage</span>
-                    <span className="text-sm font-medium">23%</span>
+                    <span className="text-sm">Authentic Content</span>
+                    <span className="text-sm font-medium">
+                      {stats?.authentic_detected ?? 0}
+                    </span>
                   </div>
-                  <Progress value={23} className="h-2 [&>div]:bg-green-500" />
+                  <Progress 
+                    value={stats?.total_analyses ? 
+                      ((stats.authentic_detected / stats.total_analyses) * 100) : 0
+                    } 
+                    className="h-2 [&>div]:bg-green-500" 
+                  />
                 </div>
 
                 <div className="pt-4 border-t">
                   <div className="flex items-center gap-2 text-sm">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-muted-foreground">Uptime:</span>
-                    <span className="font-medium">23d 14h 32m</span>
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">Total Analyses:</span>
+                    <span className="font-medium">{totalScans}</span>
                   </div>
                 </div>
               </CardContent>
@@ -260,6 +374,7 @@ export function AdminDashboard({ navigate, user, logout, users, detectionResults
                   </Button>
 
                   <Button
+                    onClick={handleGenerateReport}
                     className="h-auto p-4 flex flex-col gap-2"
                     variant="outline"
                   >

@@ -12,10 +12,10 @@ import {
   FileText,
   CheckCircle,
   XCircle,
-  Info,
   Target
 } from 'lucide-react';
 import type { DetectionResult, User } from '../App';
+import { formatDateTimeEAT } from '../utils/dateUtils';
 
 interface ResultsPageProps {
   navigate: (page: string) => void;
@@ -31,9 +31,9 @@ export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps
   console.log('[ResultsPage] Rendering with result:', {
     has_gradcam: !!result.gradcamHeatmap,
     gradcam_length: result.gradcamHeatmap?.length || 0,
-    gradcam_preview: result.gradcamHeatmap?.substring(0, 50) || 'none',
     result_id: result.id,
-    result_fileName: result.fileName
+    result_fileName: result.fileName,
+    result_type: result.result
   });
   
   const getConfidenceColor = (confidence: number) => {
@@ -78,7 +78,7 @@ export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatDateTimeEAT(dateString, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -249,22 +249,6 @@ export function ResultsPage({ navigate, user, logout, result }: ResultsPageProps
                             </span>
                           </div>
                         ))}
-                      </div>
-                    </div>
-
-                    {/* Technical Details */}
-                    <div className="p-4 bg-blue-50 rounded-lg">
-                      <div className="flex items-start gap-3">
-                        <Info className="h-5 w-5 text-blue-600 mt-0.5" />
-                        <div className="text-sm">
-                          <p className="font-medium text-blue-900 mb-1">Technical Information</p>
-                          <ul className="text-blue-700 space-y-1">
-                            <li>• Algorithm: DeepDetect AI v2.1</li>
-                            <li>• Analysis Time: 2.3 seconds</li>
-                            <li>• Model Accuracy: 99.2%</li>
-                            <li>• Dataset: 50M+ verified samples</li>
-                          </ul>
-                        </div>
                       </div>
                     </div>
                   </CardContent>

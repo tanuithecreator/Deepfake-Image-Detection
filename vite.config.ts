@@ -52,7 +52,7 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
-    outDir: 'build',
+    outDir: 'dist',
   },
   server: {
     port: 3000,
@@ -63,7 +63,7 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:5000', // Your Flask backend address
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''), // Removes /api before sending
+        secure: false,
       },
     },
   },

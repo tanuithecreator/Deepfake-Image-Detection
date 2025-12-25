@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Upload, FileText, Shield, TrendingUp } from 'lucide-react';
 import type { DetectionResult, User } from '../App';
+import { formatDateShort } from '../utils/dateUtils';
 
 interface DashboardProps {
   navigate: (page: string) => void;
@@ -34,11 +35,7 @@ export function Dashboard({ navigate, user, logout, recentResults }: DashboardPr
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    return formatDateShort(dateString);
   };
 
   return (

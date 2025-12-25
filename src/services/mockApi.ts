@@ -229,7 +229,7 @@ export class MockApiService {
     };
   }
 
-  async detectDeepfakeFromUrl(url: string, onProgress?: UploadProgressCallback): Promise<DetectionResult> {
+  async detectDeepfakeFromUrl(url: string, onProgress?: (progress: number) => void): Promise<DetectionResult> {
     // Simulate URL download and analysis
     if (onProgress) {
       for (let i = 0; i <= 100; i += 10) {

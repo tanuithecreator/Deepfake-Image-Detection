@@ -26,6 +26,7 @@ type BackendUser = {
   status?: string | null;
   created_at: string;
   last_login_at?: string | null;
+  total_scans?: number; // Added by backend /admin/users endpoint
 };
 
 type BackendRegisterResponse = {
@@ -111,7 +112,7 @@ const toFrontendUser = (user: BackendUser): User => ({
   status: (user.status === 'suspended' || user.status === 'banned') ? 'suspended' : 'active',
   joinDate: user.created_at.split('T')[0],
   lastActive: user.last_login_at ? user.last_login_at.split('T')[0] : user.created_at.split('T')[0],
-  totalScans: 0,
+  totalScans: user.total_scans ?? 0, // Use total_scans from backend if available
 });
 
 const toFrontendDetectionResult = (
@@ -285,6 +286,42 @@ class ApiService {
     return toFrontendUser(data);
   }
 
+  async getGoogleAuthUrl(redirectUri?: string): Promise<{ auth_url: string; redirect_uri: string }> {
+    const body = redirectUri ? JSON.stringify({ redirect_uri: redirectUri }) : undefined;
+    return this.request<{ auth_url: string; redirect_uri: string }>('/auth/google', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+  }
+
+  async googleSignIn(idToken: string): Promise<User> {
+    const data = await this.request<BackendLoginResponse>('/auth/google/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ id_token: idToken }),
+    });
+
+    if (!data.access_token) {
+      throw new Error('No access token received from server');
+    }
+    
+    this.setToken(data.access_token);
+    
+    // Verify it was stored
+    const verifyToken = localStorage.getItem('authToken');
+    if (!verifyToken || verifyToken !== data.access_token) {
+      console.error('Token storage verification failed!');
+      throw new Error('Failed to store authentication token');
+    }
+    
+    return toFrontendUser(data.user);
+  }
+
   async logout(): Promise<void> {
     this.clearToken();
   }
@@ -436,7 +473,8 @@ class ApiService {
     if (response.gradcam_heatmap) {
       result.gradcamHeatmap = response.gradcam_heatmap;
     }
-
+    
+    // Add text explanation if available
     // Add video analysis if available
     if (response.video_analysis) {
       result.videoAnalysis = response.video_analysis;
@@ -476,6 +514,22 @@ class ApiService {
     });
 
     return data.users.map(toFrontendUser);
+  }
+
+  async getAdminHistory(page = 1, perPage = 100): Promise<{ results: DetectionResult[]; total: number }> {
+    const data = await this.request<BackendHistoryResponse>(`/admin/history?page=${page}&per_page=${perPage}`, {
+      method: 'GET',
+      headers: this.getAuthHeaders(),
+    });
+
+    const mappedResults = data.results.map((result) =>
+      toFrontendDetectionResult(result, result.media_file, result.model ?? undefined),
+    );
+
+    return {
+      results: mappedResults,
+      total: data.total,
+    };
   }
 
   async getAdminStats(timeRange: string = '30d'): Promise<{
