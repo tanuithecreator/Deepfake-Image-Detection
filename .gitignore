@@ -275,3 +275,5 @@ out/
 # Session log - contains prompts in plaintext, never commit.
 memory.md
 memory-archive.md
+
+.vercel
