@@ -3,6 +3,7 @@ import base64
 import hashlib
 import os
 import tempfile
+import threading
 from datetime import datetime
 from io import BytesIO
 from uuid import uuid4
@@ -42,16 +43,28 @@ api_bp = Blueprint('api', __name__)
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "bmp"}
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv", "webm", "flv", "wmv"}
 ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
-MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "model", "combined_resnet18_best.pth"
+MODEL_PATH = os.getenv(
+    "MODEL_PATH",
+    os.path.join(os.path.dirname(__file__), "model", "combined_resnet18_deploy.pth"),
 )
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# The model and the OpenCV face detector are process-wide mutable singletons.
+# Grad-CAM registers forward/backward hooks on the shared model and calls
+# zero_grad() on it, and cv2.dnn.Net.setInput/forward is not thread-safe. With
+# more than one worker thread, a concurrent prediction would trip those hooks
+# and capture another request's activations. Serialise the whole inference path.
+# The liveness probe touches neither, so it stays answerable while this is held.
+_INFERENCE_LOCK = threading.RLock()
+
+torch.set_num_threads(int(os.getenv("TORCH_NUM_THREADS", "1")))
 DEFAULT_MODEL_NAME = "Combined ResNet18"
 DEFAULT_MODEL_VERSION = "1.0.0"
 
 # Video processing settings
 FRAMES_PER_SECOND = 1  # Extract 1 frame per second
 MAX_FRAMES = 30  # Maximum frames to process per video
+MAX_FRAME_DIMENSION = int(os.getenv("MAX_FRAME_DIMENSION", "640"))
 
 # Load model at startup
 model = None
@@ -290,6 +303,11 @@ def extract_video_frames(video_bytes: bytes) -> list:
                 if frame_count % frame_interval == 0:
                     # Convert numpy array to PIL Image
                     pil_image = Image.fromarray(frame)
+                    if max(pil_image.size) > MAX_FRAME_DIMENSION:
+                        pil_image.thumbnail(
+                            (MAX_FRAME_DIMENSION, MAX_FRAME_DIMENSION),
+                            Image.BILINEAR,
+                        )
                     frames.append(pil_image)
                     extracted_count += 1
                     
@@ -314,9 +332,13 @@ def generate_gradcam(model, image_tensor, target_layer_name=None):
     if model is None:
         raise Exception("Model not loaded")
     
-    # Set model to train mode temporarily to enable gradients
-    # Gradients are only computed in train mode
-    model.train()
+    # NOTE: do NOT call model.train() here. Gradients flow in eval mode as long
+    # as the input requires grad and we are outside torch.no_grad(); train mode
+    # is not needed for them. It is actively harmful: BatchNorm would normalise
+    # against a batch of one AND update its running statistics, permanently
+    # mutating the model. Measured drift on a fixed image across three Grad-CAM
+    # calls: confidence 0.7713 -> 0.8091 -> 0.8330. Staying in eval() keeps the
+    # model deterministic.
     
     # Get the target layer (for ResNet18, use layer4 - the last conv block)
     target_layer = None
@@ -485,6 +507,12 @@ def heatmap_to_base64(heatmap_image: np.ndarray) -> str:
     return f"data:image/png;base64,{img_str}"
 
 def run_inference(image_bytes: bytes, generate_gradcam_heatmap: bool = False) -> tuple:
+    """Thread-safe entry point. See _run_inference_locked for behaviour."""
+    with _INFERENCE_LOCK:
+        return _run_inference_locked(image_bytes, generate_gradcam_heatmap)
+
+
+def _run_inference_locked(image_bytes: bytes, generate_gradcam_heatmap: bool = False) -> tuple:
     """
     Run PyTorch model inference on image bytes.
     Detects and crops face before inference (model expects face crops).
@@ -1859,6 +1887,15 @@ def reset_user_password():
 # ============================================================================
 # Health Check Endpoint
 # ============================================================================
+
+@api_bp.route("/healthz/live", methods=["GET"])
+def liveness_check():
+    """Dependency-free liveness probe for platform health checks and keep-alive
+    pings. Deliberately does not query the database: the managed Postgres scales
+    to zero and has a monthly compute budget, so a periodic ping that opened a
+    connection would keep it permanently awake."""
+    return jsonify({"status": "ok"}), 200
+
 
 @api_bp.route("/health", methods=["GET"])
 def health_check():

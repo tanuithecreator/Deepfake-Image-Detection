@@ -130,6 +130,8 @@ static/uploads/
 *.pkl
 *.pickle
 backend/model/*.pth
+# Exception: stripped inference-only checkpoint (45MB) ships with the image.
+!backend/model/combined_resnet18_deploy.pth
 backend/model/*.pt
 models/
 checkpoints/
@@ -269,3 +271,7 @@ out/
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
+
+# Session log - contains prompts in plaintext, never commit.
+memory.md
+memory-archive.md

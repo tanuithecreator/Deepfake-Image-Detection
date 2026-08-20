@@ -1,4 +1,7 @@
+import ctypes
+import gc
 import os
+import platform
 from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -6,6 +9,17 @@ from dotenv import load_dotenv
 from .extensions import db, migrate, bcrypt, jwt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+
+# Torch frees inference tensors back to glibc's arena, not to the OS, so RSS
+# stays at its high-water mark. On a 512MB instance a few Grad-CAM requests are
+# enough to cross the limit and get the process OOM-killed. malloc_trim(0)
+# returns that arena. glibc only -- absent on Windows dev machines.
+_LIBC = None
+if platform.system() == "Linux":
+    try:
+        _LIBC = ctypes.CDLL("libc.so.6")
+    except OSError:
+        _LIBC = None
 
 def create_app(config_name='development'):
     """Application factory function."""
@@ -56,6 +70,17 @@ def create_app(config_name='development'):
     def close_db(error):
         """Close database connection at the end of request."""
         db.session.remove()
+
+    @app.teardown_request
+    def release_heap(error):
+        """Return freed inference memory to the OS after each request.
+
+        Deliberately trading a few milliseconds of latency for headroom: the
+        instance has 512MB and a Grad-CAM request peaks near that on its own.
+        """
+        if _LIBC is not None:
+            gc.collect()
+            _LIBC.malloc_trim(0)
     
     # Add JWT error handlers for better error messages
     @jwt.expired_token_loader

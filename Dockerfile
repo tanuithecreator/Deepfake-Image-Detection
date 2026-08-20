@@ -2,30 +2,34 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+# opencv-python-headless still needs libglib/libgomp, but not the X11/GL stack
+# that the non-headless wheel pulls in.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
 COPY backend/ /app/backend/
-WORKDIR /app/backend
+RUN mkdir -p /app/backend/uploads
 
-# Create uploads directory
-RUN mkdir -p uploads
+# Single-threaded BLAS/OMP: the free instance is a fraction of a CPU and every
+# extra thread carries its own allocator arena against a 512MB ceiling.
+# MALLOC_ARENA_MAX caps those arenas, which otherwise default to 8*ncores and
+# inflate RSS well beyond live data.
+ENV MALLOC_ARENA_MAX=2
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV TORCH_NUM_THREADS=1
+ENV PYTHONUNBUFFERED=1
 
-# Expose port
 EXPOSE 8080
 
-# Run migrations and start server
-CMD flask db upgrade && gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 300 --worker-class sync app:app
-
+# ONE worker, deliberately. Each gunicorn worker loads its own torch and model
+# (~420MB measured at boot); a second worker guarantees an OOM kill at 512MB.
+# Two threads keep the liveness probe answerable while a long video analysis
+# runs -- inference itself is serialised by a lock in routes.py.
+CMD ["sh", "-c", "python -m flask --app backend.app:create_app db upgrade --directory backend/migrations && exec gunicorn 'backend.app:create_app()' --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 2 --timeout 300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
