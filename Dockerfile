@@ -32,4 +32,7 @@ EXPOSE 8080
 # (~420MB measured at boot); a second worker guarantees an OOM kill at 512MB.
 # Two threads keep the liveness probe answerable while a long video analysis
 # runs -- inference itself is serialised by a lock in routes.py.
-CMD ["sh", "-c", "python -m flask --app backend.app:create_app db upgrade --directory backend/migrations && exec gunicorn 'backend.app:create_app()' --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 2 --timeout 300 --graceful-timeout 30 --access-logfile - --error-logfile -"]
+# --max-requests recycles the worker periodically. Measured RSS is flat across
+# repeated requests, so this is insurance against a slow leak rather than a fix
+# for a known one; the interval is high enough that the reload is rare.
+CMD ["sh", "-c", "python -m flask --app backend.app:create_app db upgrade --directory backend/migrations && exec gunicorn 'backend.app:create_app()' --bind 0.0.0.0:${PORT:-8080} --workers 1 --threads 2 --timeout 300 --graceful-timeout 30 --max-requests 200 --max-requests-jitter 50 --access-logfile - --error-logfile -"]

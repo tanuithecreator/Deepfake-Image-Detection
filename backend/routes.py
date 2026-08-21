@@ -1,5 +1,6 @@
 
 import base64
+import gc
 import hashlib
 import os
 import tempfile
@@ -98,7 +99,9 @@ try:
     # Modify the final layer for 2 classes (REAL/FAKE)
     model.fc = torch.nn.Linear(model.fc.in_features, 2)
 
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+    # weights_only=True refuses to unpickle arbitrary objects and skips building
+    # any non-tensor payload. The deploy checkpoint is plain tensors plus scalars.
+    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True)
     
     # Extract model state dict
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
@@ -120,6 +123,15 @@ try:
     model.load_state_dict(cleaned_state_dict, strict=False)
     model.to(DEVICE)
     model.eval()
+
+    # Grad-CAM needs the gradient of the score w.r.t. the target layer's
+    # ACTIVATIONS, which the backward hook captures. Gradients w.r.t. the weights
+    # are never read, but backward() allocates a .grad buffer for every parameter
+    # anyway -- 11.2M floats, ~45MB -- which then stays attached to the model.
+    # Switching them off keeps the activation graph (the input still requires
+    # grad) while skipping that allocation entirely, and makes backward cheaper.
+    for _param in model.parameters():
+        _param.requires_grad_(False)
     
     # Print model info
     if isinstance(checkpoint, dict):
@@ -135,7 +147,14 @@ try:
             print(f"[OK] Model loaded: {MODEL_PATH}")
     else:
         print(f"[OK] Model loaded: {MODEL_PATH}")
-        
+
+    # Free the checkpoint. These are module-level names, so without this they
+    # stay referenced for the life of the process -- a second full copy of every
+    # parameter, on an instance with a hard 512MB ceiling. load_state_dict has
+    # already copied the values into the model.
+    del checkpoint, state_dict, cleaned_state_dict
+    gc.collect()
+
 except Exception as e:
     print(f"[ERROR] Failed to load model: {e}")
     import traceback
