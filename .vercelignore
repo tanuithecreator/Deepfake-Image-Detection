@@ -1,0 +1,19 @@
+# Vercel hosts the Vite frontend only. The Flask/torch backend runs on Render.
+# Without this, the CLI uploads backend/model/, including a 2.35GB training
+# checkpoint, and the deploy fails on Vercel's 2GiB per-file limit.
+backend/
+training/
+instance/
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pth
+*.pt
+*.db
+*.ipynb
+Dockerfile
+.dockerignore
+Procfile
+render.yaml
+runtime.txt

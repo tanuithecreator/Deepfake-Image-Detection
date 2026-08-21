@@ -1,0 +1,279 @@
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+backend/.venv/
+.venv/
+
+# PyCharm
+.idea/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+# Keep .ipynb files in training/ directory
+!training/*.ipynb
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ============================================================================
+# Node.js / Frontend
+# ============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+*.local
+
+# Vite
+.vite/
+vite.config.js.timestamp-*
+
+# TypeScript
+*.tsbuildinfo
+
+# ============================================================================
+# Database Files
+# ============================================================================
+*.db
+*.sqlite
+*.sqlite3
+instance/
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ============================================================================
+# Environment Variables
+# ============================================================================
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ============================================================================
+# Uploads & Media Files
+# ============================================================================
+uploads/
+backend/uploads/
+media/
+static/uploads/
+# Ignore uploaded media files (user uploads)
+# But keep test/sample files in specific directories if needed
+# Uncomment to ignore all video files:
+# *.mp4
+# *.mov
+# *.avi
+# *.mkv
+# *.webm
+# *.flv
+# *.wmv
+
+# ============================================================================
+# Model Files (Large binary files)
+# ============================================================================
+# Ignore model files - these are typically too large for git
+# Uncomment if you want to track model files (not recommended for large files):
+# !backend/model/combined_resnet18_best.pth
+*.pth
+*.pt
+*.h5
+*.ckpt
+*.pkl
+*.pickle
+backend/model/*.pth
+# Exception: stripped inference-only checkpoint (45MB) ships with the image.
+!backend/model/combined_resnet18_deploy.pth
+backend/model/*.pt
+models/
+checkpoints/
+weights/
+
+# ============================================================================
+# IDE & Editor Files
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================================
+# OS Files
+# ============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ============================================================================
+# Logs & Temporary Files
+# ============================================================================
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.swp
+*.swo
+temp/
+tmp/
+.tmp/
+
+# ============================================================================
+# Flask Specific
+# ============================================================================
+instance/
+.webassets-cache
+flask_session/
+
+# ============================================================================
+# Alembic (Database Migrations)
+# ============================================================================
+# Keep migration files, but ignore compiled Python
+backend/migrations/__pycache__/
+backend/migrations/versions/__pycache__/
+
+# ============================================================================
+# Testing
+# ============================================================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+test-results/
+coverage/
+
+# ============================================================================
+# Documentation Build
+# ============================================================================
+docs/_build/
+site/
+
+# ============================================================================
+# Package Manager Lock Files (Optional - uncomment if you want to ignore)
+# ============================================================================
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ============================================================================
+# Miscellaneous
+# ============================================================================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+.cache/
+.parcel-cache/
+.next/
+out/
+.nuxt/
+.cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Session log - contains prompts in plaintext, never commit.
+memory.md
+memory-archive.md
+
+.vercel

@@ -1,0 +1,29 @@
+flask==3.0.3
+flask-sqlalchemy==3.1.1
+flask-migrate==4.0.7
+flask-bcrypt==1.0.1
+flask-cors==4.0.1
+flask-jwt-extended==4.6.0
+python-dotenv==1.0.1
+psycopg[binary]==3.2.12
+# The +cpu local version exists ONLY on the PyTorch CPU index, which forces pip
+# to resolve these from there. A bare `torch==2.6.0` with --extra-index-url does
+# NOT: pip considers both indexes and takes PyPI's Linux wheel, which is a 732MB
+# CUDA build that also pulls ~14 nvidia-*/triton packages (several GB). That is
+# invisible on Windows, where PyPI's torch is CPU-only anyway.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+pillow==10.4.0
+opencv-python-headless==4.10.0.84
+imageio==2.35.1
+imageio-ffmpeg==0.5.1
+numpy==2.2.6
+reportlab==4.2.5
+timm>=0.9.0
+requests>=2.31.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+gunicorn==21.2.0
+

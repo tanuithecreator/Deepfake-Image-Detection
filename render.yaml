@@ -1,0 +1,35 @@
+# Render Blueprint - free tier, no card.
+#
+# NOTE: Render only applies healthCheckPath at service CREATION. It does not
+# sync this field to a service that already exists, so if the service is
+# recreated, re-check it in the dashboard.
+services:
+  - type: web
+    name: deepdetect-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/healthz/live
+    autoDeploy: true
+    envVars:
+      # Neon Postgres. Must use the postgresql+psycopg:// scheme (psycopg3),
+      # not the postgres:// URL Neon shows by default.
+      - key: DATABASE_URI
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      # Comma-separated. Must include the Vercel frontend origin.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: TORCH_NUM_THREADS
+        value: "1"
+      - key: MAX_FRAME_DIMENSION
+        value: "640"
