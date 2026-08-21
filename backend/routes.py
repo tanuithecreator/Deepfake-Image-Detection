@@ -65,6 +65,27 @@ DEFAULT_MODEL_VERSION = "1.0.0"
 FRAMES_PER_SECOND = 1  # Extract 1 frame per second
 MAX_FRAMES = 30  # Maximum frames to process per video
 MAX_FRAME_DIMENSION = int(os.getenv("MAX_FRAME_DIMENSION", "640"))
+# Still-image guard. MAX_CONTENT_LENGTH bounds bytes, not pixels, and those are
+# unrelated for compressed formats: a 1.1MB JPEG at 4000x3000 decodes to 36MB of
+# RGB, and face detection copies it again (numpy, BGR, grayscale). Measured RSS
+# for one such request was 1207MB against a 512MB instance. The detector resizes
+# to 300x300 and the classifier to 224x224, so this bound costs no real detail.
+MAX_IMAGE_DIMENSION = int(os.getenv("MAX_IMAGE_DIMENSION", "1024"))
+
+
+def _load_bounded_image(image_bytes: bytes) -> Image.Image:
+    """Decode an upload with its resolution bounded.
+
+    draft() lets libjpeg decode straight to a reduced scale, so an oversized JPEG
+    never has to be materialised at full size. It is a no-op for other formats,
+    which then get resized after decode.
+    """
+    img = Image.open(BytesIO(image_bytes))
+    img.draft("RGB", (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+    img = img.convert("RGB")
+    if max(img.size) > MAX_IMAGE_DIMENSION:
+        img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.BILINEAR)
+    return img
 
 # Load model at startup
 model = None
@@ -527,8 +548,8 @@ def _run_inference_locked(image_bytes: bytes, generate_gradcam_heatmap: bool = F
         raise Exception("Model not loaded")
     
     try:
-        # Load image
-        image = Image.open(BytesIO(image_bytes)).convert('RGB')
+        # Load image (resolution-bounded; see _load_bounded_image)
+        image = _load_bounded_image(image_bytes)
         
         # Detect and crop face (model was trained on face crops)
         face_crop, face_info = detect_and_crop_face(image)
