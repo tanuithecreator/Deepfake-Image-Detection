@@ -30,6 +30,17 @@ def create_app(config_name='development'):
         'DATABASE_URI',
         'postgresql+psycopg://postgres:password@localhost:5432/deepfake_db'
     )
+
+    # Managed providers hand out 'postgres://' (Neon, Heroku) or 'postgresql://'.
+    # SQLAlchemy maps both to the psycopg2 dialect, but requirements.txt ships
+    # psycopg3, so the dialect import raises ModuleNotFoundError at boot -- before
+    # any request, which makes it look like a crash rather than a config error.
+    # Normalise the scheme so a pasted connection string just works.
+    if database_uri.startswith('postgres://'):
+        database_uri = 'postgresql+psycopg://' + database_uri[len('postgres://'):]
+    elif database_uri.startswith('postgresql://'):
+        database_uri = 'postgresql+psycopg://' + database_uri[len('postgresql://'):]
+
     
     # Add SQLite-specific configuration if using SQLite
     # Note: SQLite connection args are handled via SQLALCHEMY_ENGINE_OPTIONS below
